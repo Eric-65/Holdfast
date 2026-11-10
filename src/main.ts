@@ -2,15 +2,20 @@ import './style.css'
 import { attachWallet, ctx, onChange, refreshChain, refreshPrices } from './app'
 import { decodeKeeper } from './lib/share'
 import { initTheme, syncToggle, toggleTheme } from './lib/theme'
-import { connectNimiqPay, createDemoWallet, insideNimiqPay } from './lib/wallet'
+import { connectNimiqPay, createDemoWallet, errorMessage, insideNimiqPay, isUserRejection } from './lib/wallet'
 import { html } from './ui'
 import { header } from './views/common'
 import { renderKeeper } from './views/keeper'
-import { renderConnecting, renderHome, renderLanding } from './views/saver'
+import { renderConnectFailed, renderConnecting, renderHome, renderLanding } from './views/saver'
 
 const root = document.getElementById('app')!
 initTheme()
-let connecting = true
+
+/** outside: normal browser. connecting: waiting on Nimiq Pay. failed: it declined or didn't answer. */
+let conn: 'outside' | 'connecting' | 'failed' = insideNimiqPay() ? 'connecting' : 'outside'
+let connError = ''
+const CONNECT_TIMEOUT_MS = 20_000
+const startDemo = () => void attachWallet(createDemoWallet())
 
 // Views re-render often, so the theme switch uses one delegated listener.
 document.addEventListener('click', (e) => {
@@ -32,10 +37,9 @@ function route(): void {
     return
   }
   if (ctx.wallet) return renderHome(root)
-  if (connecting) return renderConnecting(root)
-  renderLanding(root, () => {
-    void attachWallet(createDemoWallet())
-  })
+  if (conn === 'connecting') return renderConnecting(root)
+  if (conn === 'failed') return renderConnectFailed(root, connError, () => void connect(), startDemo)
+  renderLanding(root, startDemo)
 }
 
 type Field = HTMLInputElement | HTMLSelectElement
@@ -96,19 +100,51 @@ document.addEventListener('focusout', () => {
   }, 300)
 })
 
+let attempt = 0
+/** Connect to the Nimiq Pay wallet. Always ends on a screen the user can act on, never an endless spinner. */
+async function connect(): Promise<void> {
+  const mine = ++attempt
+  conn = 'connecting'
+  route()
+  const fail = (message: string) => {
+    if (mine !== attempt || ctx.wallet) return
+    conn = 'failed'
+    connError = message
+    route()
+  }
+  const timer = window.setTimeout(
+    () => fail("Nimiq Pay didn't answer. If it showed a connection request, approve it, then try again."),
+    CONNECT_TIMEOUT_MS,
+  )
+  try {
+    const wallet = await connectNimiqPay(10_000)
+    if (!wallet) return fail("Couldn't reach the Nimiq Pay wallet. Close Holdfast and open it again from Nimiq Pay.")
+    // If the answer arrives after the timeout it still connects, unless a wallet is already attached.
+    if (ctx.wallet) return
+    await attachWallet(wallet)
+  } catch (err) {
+    fail(
+      isUserRejection(err)
+        ? 'You declined the connection. Holdfast needs your wallet address to track your goal.'
+        : `Nimiq Pay reported a problem: ${errorMessage(err)}`,
+    )
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
 async function boot(): Promise<void> {
   route()
   void refreshPrices()
-  const isKeeper = location.hash.startsWith('#/keep/')
   // Friends opening a Goalkeeper link don't need to connect a wallet up front.
-  if (isKeeper) {
-    connecting = false
+  if (location.hash.startsWith('#/keep/')) {
+    if (conn === 'connecting') conn = 'outside'
     return
   }
-  const wallet = await connectNimiqPay(insideNimiqPay() ? 10_000 : 2_500)
-  connecting = false
-  if (wallet) await attachWallet(wallet).catch(() => route())
-  else route()
+  if (conn === 'connecting') return connect()
+  // Outside Nimiq Pay the landing page shows at once. If the wallet turns up late, connect then.
+  const late = await connectNimiqPay(10_000)
+  if (late && !ctx.wallet) void connect()
 }
 
 document.addEventListener('visibilitychange', () => {

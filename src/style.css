@@ -103,6 +103,18 @@ a { color: inherit; }
 .card { background: var(--surface); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
 .card.center { text-align: center; }
 
+.outside-card { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; border: 2px solid color-mix(in srgb, var(--gold) 55%, transparent); }
+.outside-head { display: flex; gap: 12px; align-items: flex-start; }
+.outside-head h2 { font-size: 1.15rem; margin-bottom: 4px; }
+.outside-head p { margin: 0; color: var(--ink-2); font-size: 0.95rem; }
+.outside-icon { font-size: 1.6rem; line-height: 1.2; }
+.open-help { border-top: 1px solid var(--line); padding-top: 12px; font-size: 0.93rem; }
+.open-help ol { margin: 0 0 10px; padding-left: 20px; color: var(--ink-2); }
+.open-help li { margin: 4px 0; }
+.connect-icon { font-size: 2.6rem; }
+.center-page { gap: 10px; }
+.center-page .btn { max-width: 320px; }
+
 .btn {
   appearance: none; border: 0; cursor: pointer; font: inherit; font-weight: 700;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;

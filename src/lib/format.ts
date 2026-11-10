@@ -25,6 +25,11 @@ const FIAT_SYMBOL: Record<string, string> = { usd: '$', ngn: '₦', eur: '€', 
 
 export function formatFiat(amount: number, currency: string): string {
   const cur = currency.toLowerCase()
+  // USDT is a token, not a currency with a symbol: show it like NIM, as "12.50 USDT".
+  if (cur === 'usdt') {
+    const d = amount !== 0 && Math.abs(amount) < 1 ? 4 : 2
+    return `${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: d })} USDT`
+  }
   const sym = FIAT_SYMBOL[cur] ?? `${currency.toUpperCase()} `
   const decimals = amount !== 0 && Math.abs(amount) < 1 ? 4 : 2
   const body = Math.abs(amount).toLocaleString('en-US', {

@@ -18,6 +18,8 @@ describe('formatting', () => {
     expect(formatNim(toLuna(1234.567))).toBe('1,235')
     expect(formatNim(toLuna(12.345))).toBe('12.35')
     expect(formatFiat(1234.5, 'usd')).toBe('$1,234.50')
+    expect(formatFiat(1234.5, 'usdt')).toBe('1,234.50 USDT')
+    expect(formatFiat(0.6, 'USDT')).toBe('0.60 USDT')
     expect(formatFiat(5000, 'NGN')).toBe('₦5,000.00')
   })
   it('clamps percentages', () => {

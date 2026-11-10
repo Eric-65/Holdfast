@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { decodeKeeper, encodeKeeper, keeperUrl, nimiqPaymentUri, type KeeperPayload } from '../src/lib/share'
+import { miniAppTarget, miniAppUrl, nimiqPayDeepLink } from '../src/lib/deeplink'
 import { cheerData } from '../src/views/keeper'
 import { parseValidators, normalizeStaker } from '../src/lib/chain'
 import { parsePriceResponse } from '../src/lib/prices'
@@ -34,6 +35,19 @@ describe('goalkeeper links', () => {
   })
 })
 
+describe('open in Nimiq Pay links', () => {
+  it('uses the bare host for a root deploy and the full URL for a sub-path', () => {
+    expect(miniAppTarget({ origin: 'https://holdfast.app', host: 'holdfast.app', pathname: '/' })).toBe('holdfast.app')
+    expect(miniAppTarget({ origin: 'https://me.github.io', host: 'me.github.io', pathname: '/Holdfast/index.html' })).toBe('https://me.github.io/Holdfast/')
+    expect(miniAppUrl({ origin: 'https://me.github.io', pathname: '/Holdfast/' })).toBe('https://me.github.io/Holdfast/')
+  })
+  it('keeps : and / literal and encodes everything else', () => {
+    expect(nimiqPayDeepLink('holdfast.app')).toBe('nimiqpay://miniapp?url=holdfast.app')
+    expect(nimiqPayDeepLink('https://me.github.io/Holdfast/')).toBe('nimiqpay://miniapp?url=https://me.github.io/Holdfast/')
+    expect(nimiqPayDeepLink('https://a.b/x?y=1&z=2#h')).toBe('nimiqpay://miniapp?url=https://a.b/x%3Fy%3D1%26z%3D2%23h')
+  })
+})
+
 describe('external data parsing', () => {
   it('parses validator lists in either shape and ranks payout pools first', () => {
     const list = parseValidators({
@@ -50,7 +64,9 @@ describe('external data parsing', () => {
   it('normalizes stakers and prices', () => {
     expect(normalizeStaker('A', null).balance).toBe(0)
     expect(normalizeStaker('A', { balance: 5, inactiveBalance: 2, delegation: 'V' })).toMatchObject({ balance: 5, inactiveBalance: 2, delegation: 'V' })
-    expect(parsePriceResponse({ 'nimiq-2': { usd: 0.001, ngn: 1.6, eur: 0 } })).toEqual({ usd: 0.001, ngn: 1.6 })
+    expect(parsePriceResponse({ 'nimiq-2': { usd: 0.001, ngn: 1.6, eur: 0 } })).toEqual({ usd: 0.001, ngn: 1.6, usdt: 0.001 })
+    // USDT rate follows the live USDT/USD price when the API provides it
+    expect(parsePriceResponse({ 'nimiq-2': { usd: 0.001 }, tether: { usd: 0.8 } })!.usdt).toBeCloseTo(0.00125)
     expect(parsePriceResponse({})).toBeNull()
   })
 })

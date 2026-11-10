@@ -29,7 +29,7 @@ Built for the Nimiq Mini Apps Competition, Cycle III (Save category).
 |---|---|
 | 🔒 **Lock it** | Saving into a goal **stakes NIM from your own wallet**. Your money never leaves your control and it earns staking rewards. Getting it back takes Nimiq's unstaking cool-down, which slows down impulse withdrawals. |
 | 🛡️ **Goalkeeper** | You share a link with one trusted friend. Without signing up, they can see your progress, send you a **cheer** (a NIM gift with a message) and see if you **break the seal** (start withdrawing). |
-| 💵 **Dollar view** | Every amount shows in **NIM, USD and NGN**. You can also set your target in dollars or naira. |
+| 💵 **Dollar view** | Every amount shows in **NIM, USDT and NGN**. You can also set your target in USDT or naira. |
 | 🌗 **Light & dark theme** | Follows your phone's setting. Tap the sun/moon button to switch, and Holdfast remembers your choice. |
 
 **Holdfast never holds your money.** Every transaction is shown and signed by you in Nimiq Pay.
@@ -39,9 +39,9 @@ Built for the Nimiq Mini Apps Competition, Cycle III (Save category).
 ## How it works
 
 ### For savers
-1. **Create a goal.** Give it a name, an icon and a target (in NIM, USD or NGN), and pick a validator. A validator is the network node your stake is delegated to.
+1. **Create a goal.** Give it a name, an icon and a target (in NIM, USDT or NGN), and pick a validator. A validator is the network node your stake is delegated to.
 2. **Lock NIM.** Enter an amount or tap a shortcut (10, 50, 100, 500, or "Rest" for whatever is left to reach the target). Nimiq Pay asks you to approve the staking transaction.
-3. **Watch it grow.** A progress ring shows how close you are, in NIM and in dollars and naira.
+3. **Watch it grow.** A progress ring shows how close you are, in NIM, USDT and naira.
 4. **Share with a Goalkeeper.** Tap *Share Goalkeeper link* and send it by any app, by WhatsApp or by copying it.
 5. **Reach the goal.** Holdfast celebrates and you can start a new one. Your NIM stays staked until you decide otherwise.
 
@@ -56,8 +56,12 @@ Holdfast shows each step and tells you what to do next.
 
 ### For Goalkeepers (the friend)
 - Open the link. No app install or account is needed.
-- See the goal, progress, amounts in dollars and naira, and whether it is 🔒 sealed, 🎉 reached or ⚠️ broken.
+- See the goal, progress, amounts in USDT and naira, and whether it is 🔒 sealed, 🎉 reached or ⚠️ broken.
 - **Send a cheer:** pick an amount and write a short message. Inside Nimiq Pay it sends directly. Elsewhere it opens a Nimiq payment link.
+
+### Opening Holdfast
+- **In Nimiq Pay:** Holdfast connects to your wallet by itself. Nimiq Pay may ask you to approve sharing your wallet address. If the wallet doesn't answer or you decline, Holdfast shows a **Connect Nimiq Pay** button to try again.
+- **In a normal browser:** Holdfast tells you that you're outside Nimiq Pay and shows an **Open in Nimiq Pay** button. On a phone with Nimiq Pay installed, it opens the app there directly. If nothing happens, Holdfast shows the address to paste into Nimiq Pay under *Mini Apps → Custom URL*.
 
 ### Demo mode
 Open Holdfast in a normal browser and tap **Try the demo**. A pretend wallet with 5,000 NIM lets you try every step. No real money moves, and a **DEMO** badge is always shown.
@@ -69,7 +73,9 @@ Open Holdfast in a normal browser and tap **Try the demo**. A pretend wallet wit
 | Area | Status |
 |---|---|
 | Goal creation, locking, the full 3-step withdrawal, Goalkeeper sharing, cheers, theme switch | ✅ Built. Tested end to end in a mobile browser using demo mode |
-| Amount parsing, Nimiq address checks, goal history, share links, API data parsing | ✅ 17 automated tests |
+| Wallet connection screens (approved, declined, no answer, retry) | ✅ Tested in a browser with a simulated Nimiq Pay wallet |
+| **Open in Nimiq Pay** button | ⚠️ Built from the documented link format. Needs a check on a phone with Nimiq Pay installed |
+| Amount parsing, Nimiq address checks, goal history, share links, API data parsing | ✅ 19 automated tests |
 | Real staking transactions inside Nimiq Pay | ⚠️ Built with the official Nimiq SDK. Needs a final check on a real device |
 | Live progress straight from the blockchain | ⚙️ Works when an RPC address is set (see [Settings](#settings)). Otherwise it uses Holdfast's own records |
 
@@ -119,7 +125,8 @@ The built app is a plain static website, so any static host works. The included 
 - **Wallet:** [`@nimiq/mini-app-sdk`](https://www.npmjs.com/package/@nimiq/mini-app-sdk). The first lock creates a staker, later locks add to it, and withdrawals use the deactivate, retire and remove steps.
 - **Storage:** your goals are saved on your device, separately for each wallet address.
 - **Goalkeeper link:** the goal details sit in the part of the link after `#`, which browsers never send to a server.
-- **Prices:** NIM prices from CoinGecko, refreshed every 5 minutes. If it can't be reached, Holdfast shows the last known price.
+- **Open in Nimiq Pay:** the button uses Nimiq Pay's `nimiqpay://miniapp?url=…` link.
+- **Prices:** NIM prices from CoinGecko, converted to USDT with the live USDT rate, refreshed every 5 minutes. If it can't be reached, Holdfast shows the last known price.
 
 ```
 src/

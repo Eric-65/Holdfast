@@ -5,7 +5,7 @@ import { html, raw, type Raw } from '../ui'
 export function fiatRow(luna: number, cls = 'fiat-row'): Raw {
   const vals = fiatValues(luna)
   if (!vals.length)
-    return html`<div class="${cls} muted">${ctx.prices === null ? 'Dollar view unavailable offline' : ''}</div>`
+    return html`<div class="${cls} muted">${ctx.prices === null ? 'USDT and NGN values unavailable offline' : ''}</div>`
   return html`<div class="${cls}">
     ${vals.map((v) => html`<span class="fiat-pill" data-cur="${v.currency}">${formatFiat(v.value, v.currency)}</span>`)}
     ${ctx.prices?.stale ? html`<span class="muted small">· rate ${timeAgo(ctx.prices.updatedAt)}</span>` : ''}

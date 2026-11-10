@@ -14,7 +14,7 @@ export interface AppCtx {
   prices: PriceState | null
   validators: Validator[]
   validatorsLoaded: boolean
-  /** Fiat currencies shown next to NIM: USD and NGN always, plus the host's currency. */
+  /** Currencies shown next to NIM: USDT and NGN always, plus the host's currency (never plain USD). */
   fiats: string[]
 }
 
@@ -29,9 +29,9 @@ export const ctx: AppCtx = {
   validators: [],
   validatorsLoaded: false,
   fiats: (() => {
-    const base = ['usd', 'ngn']
+    const base = ['usdt', 'ngn']
     const h = hostFiat()
-    return h && !base.includes(h) ? [...base, h] : base
+    return h && h !== 'usd' && !base.includes(h) ? [...base, h] : base
   })(),
 }
 
@@ -48,12 +48,15 @@ export function commit(state: StoreState): void {
 }
 
 export async function attachWallet(wallet: Wallet): Promise<void> {
+  // Only treat the wallet as connected once it has actually shared an address.
+  const accounts = await wallet.listAccounts()
+  if (!Array.isArray(accounts) || !accounts[0]) throw new Error('Nimiq Pay did not share a wallet address')
   ctx.wallet = wallet
-  ctx.accounts = await wallet.listAccounts()
-  ctx.address = ctx.accounts[0] ?? null
-  if (ctx.address) ctx.state = loadState(ctx.address)
-  wallet.onAccountsChanged((accounts) => {
-    ctx.accounts = accounts
+  ctx.accounts = accounts
+  ctx.address = accounts[0]
+  ctx.state = loadState(ctx.address)
+  wallet.onAccountsChanged((next) => {
+    ctx.accounts = next
     void refreshChain()
   })
   emit(true)

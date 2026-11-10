@@ -16,6 +16,7 @@ import {
 } from '../lib/store'
 import { keeperUrl, type KeeperPayload } from '../lib/share'
 import { errorMessage, isUserRejection } from '../lib/wallet'
+import { isMobileDevice, miniAppUrl, NIMIQ_PAY_INSTALL_URL, nimiqPayDeepLink } from '../lib/deeplink'
 import { $, $$, busy, copyText, html, openSheet, raw, ring, toast, type Raw } from '../ui'
 import { demoBadge, fiatRow, header, nim } from './common'
 
@@ -24,8 +25,32 @@ const EMOJIS = ['🎯', '🏠', '🎓', '✈️', '🚗', '💍', '📱', '🛡�
 // ---------- Landing (not connected) ----------
 
 export function renderLanding(root: HTMLElement, onDemo: () => void): void {
+  const deepLink = nimiqPayDeepLink()
+  const pasteUrl = miniAppUrl()
+  const mobile = isMobileDevice()
   root.innerHTML = html`${header()}
   <main class="page landing">
+    <section class="card outside-card">
+      <div class="outside-head">
+        <span class="outside-icon" aria-hidden="true">📱</span>
+        <div>
+          <h2>You're outside Nimiq Pay</h2>
+          <p>Look around here. Saving and locking NIM works inside the Nimiq Pay wallet.</p>
+        </div>
+      </div>
+      <a class="btn btn-primary" id="open-nimiq-pay" href="${deepLink}">Open in Nimiq Pay ↗</a>
+      <div id="open-help" class="open-help ${mobile ? 'hidden' : ''}">
+        <p><b>${mobile ? 'Nothing happened?' : 'On a computer?'}</b>
+          ${mobile ? 'Nimiq Pay may not be installed, or your browser blocked the link.' : 'Open this page on the phone where Nimiq Pay is installed, or:'}</p>
+        <ol>
+          <li><a href="${NIMIQ_PAY_INSTALL_URL}" target="_blank" rel="noopener">Get Nimiq Pay</a> if you don't have it.</li>
+          <li>In Nimiq Pay, open <b>Mini Apps</b> and choose <b>Custom URL</b>.</li>
+          <li>Paste this address:</li>
+        </ol>
+        <div class="share-url" id="paste-url">${pasteUrl}</div>
+        <button class="btn btn-secondary" id="copy-url">Copy address</button>
+      </div>
+    </section>
     <section class="hero">
       <h1>Save it. Stake it. <span class="gold">Hold fast.</span></h1>
       <p class="lead">Lock savings goals by staking NIM from your own wallet. It earns rewards, stays yours,
@@ -34,20 +59,48 @@ export function renderLanding(root: HTMLElement, onDemo: () => void): void {
     <ol class="pillars">
       <li><b>🔒 Lock it</b><span>Saving = staking. The unstaking cool-down puts a speed bump in front of impulse withdrawals.</span></li>
       <li><b>🛡️ Goalkeeper</b><span>Share a link with one friend. They see your progress, send a cheer in NIM and see if you break the seal.</span></li>
-      <li><b>💵 Dollar view</b><span>Every goal in NIM, USD and NGN.</span></li>
+      <li><b>💵 Dollar view</b><span>Every goal in NIM, USDT and NGN.</span></li>
     </ol>
     <div class="card center">
-      <p><b>Open Holdfast inside Nimiq Pay</b> to use your wallet. Holdfast never holds your funds: every
-        transaction is signed by you in Nimiq Pay.</p>
-      <button class="btn btn-ghost" id="demo">Try the demo (no real NIM)</button>
+      <p class="muted">Just want to look around? The demo uses a pretend wallet. No real NIM moves.</p>
+      <button class="btn btn-ghost" id="demo">Try the demo</button>
     </div>
   </main>`.html
   $('#demo', root)!.addEventListener('click', onDemo)
+  // If Nimiq Pay doesn't take over within a few seconds, show the manual way in.
+  $('#open-nimiq-pay', root)!.addEventListener('click', () => {
+    window.setTimeout(() => {
+      if (document.visibilityState === 'visible') $('#open-help')?.classList.remove('hidden')
+    }, 2500)
+  })
+  $('#copy-url', root)!.addEventListener('click', async () => {
+    if (await copyText(pasteUrl)) toast('Address copied. Paste it in Nimiq Pay.', 'success')
+    else toast('Copy failed. Long-press the address to copy.', 'error')
+  })
 }
 
 export function renderConnecting(root: HTMLElement): void {
   root.innerHTML = html`${header()}
-  <main class="page center-page"><div class="spinner big"></div><p class="muted">Connecting to Nimiq Pay…</p></main>`.html
+  <main class="page center-page">
+    <div class="spinner big"></div>
+    <h2>Connecting to your wallet…</h2>
+    <p class="muted">If Nimiq Pay asks, approve the request so Holdfast can see your wallet address.</p>
+  </main>`.html
+}
+
+/** Shown instead of an endless spinner when Nimiq Pay doesn't answer or the user declines. */
+export function renderConnectFailed(root: HTMLElement, message: string, onRetry: () => void, onDemo: () => void): void {
+  root.innerHTML = html`${header()}
+  <main class="page center-page">
+    <div class="connect-icon" aria-hidden="true">🔌</div>
+    <h2>Wallet not connected</h2>
+    <p class="muted">${message}</p>
+    <button class="btn btn-primary" id="retry">Connect Nimiq Pay</button>
+    <button class="btn btn-link" id="demo">Try the demo instead</button>
+    <p class="muted small">Holdfast only reads your wallet address. It can't move NIM without your approval.</p>
+  </main>`.html
+  $('#retry', root)!.addEventListener('click', onRetry)
+  $('#demo', root)!.addEventListener('click', onDemo)
 }
 
 // ---------- Home (connected) ----------
