@@ -3,10 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#1F2348" />
+    <meta name="theme-color" content="#f4f5fa" />
     <meta name="description" content="Holdfast: Save it. Stake it. Hold fast. Non-custodial savings goals for Nimiq Pay." />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <title>Holdfast</title>
+    <script>
+      // Set the theme before first paint to avoid a light/dark flash.
+      try {
+        var t = localStorage.getItem('holdfast.theme')
+        if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        document.documentElement.dataset.theme = t
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>

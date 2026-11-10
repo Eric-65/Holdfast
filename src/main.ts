@@ -1,6 +1,7 @@
 import './style.css'
 import { attachWallet, ctx, onChange, refreshChain, refreshPrices } from './app'
 import { decodeKeeper } from './lib/share'
+import { initTheme, syncToggle, toggleTheme } from './lib/theme'
 import { connectNimiqPay, createDemoWallet, insideNimiqPay } from './lib/wallet'
 import { html } from './ui'
 import { header } from './views/common'
@@ -8,7 +9,17 @@ import { renderKeeper } from './views/keeper'
 import { renderConnecting, renderHome, renderLanding } from './views/saver'
 
 const root = document.getElementById('app')!
+initTheme()
 let connecting = true
+
+// Views re-render often, so the theme switch uses one delegated listener.
+document.addEventListener('click', (e) => {
+  const btn = (e.target as Element).closest?.('.theme-toggle')
+  if (btn) toggleTheme()
+})
+new MutationObserver(() => document.querySelectorAll<HTMLButtonElement>('.theme-toggle').forEach(syncToggle)).observe(root, {
+  childList: true,
+})
 
 function route(): void {
   const hash = location.hash.replace(/^#/, '')

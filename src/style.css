@@ -12,20 +12,33 @@
   --lock: #2f6fe0;
   --radius: 18px;
   --shadow: 0 6px 24px rgba(31, 35, 72, 0.08);
+  --demo-bg: #fff1d6;
+  --demo-ink: #9a6400;
+  --secondary-bg: #1f2348;
+  --secondary-ink: #ffffff;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Mulish', Helvetica, Arial, sans-serif;
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14162e;
-    --surface: #1f2348;
-    --ink: #f2f3fb;
-    --ink-2: #c9cbe6;
-    --muted: #9195bd;
-    --line: #2f3463;
-    --shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
-    color-scheme: dark;
-  }
+:root[data-theme='dark'] {
+  --bg: #14162e;
+  --surface: #1f2348;
+  --ink: #f2f3fb;
+  --ink-2: #c9cbe6;
+  --muted: #9195bd;
+  --line: #2f3463;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+  --demo-bg: #4a3a12;
+  --demo-ink: #f6c453;
+  --secondary-bg: #343a78;
+  --secondary-ink: #ffffff;
+  --lock: #7aa5ff;
+  --good: #3fcf96;
+  --bad: #ff7a7a;
+  color-scheme: dark;
+}
+/* Smooth cross-fade, only while the user flips the switch. */
+.theme-anim, .theme-anim * {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease !important;
 }
 
 * { box-sizing: border-box; }
@@ -38,6 +51,7 @@ body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+  min-height: 100vh;
 }
 h1, h2, h3 { margin: 0 0 0.4em; line-height: 1.15; }
 h1 { font-size: 1.75rem; letter-spacing: -0.02em; }
@@ -59,7 +73,19 @@ a { color: inherit; }
 .brand { display: flex; align-items: center; gap: 8px; text-decoration: none; font-weight: 800; font-size: 1.1rem; }
 .logo { width: 30px; height: 30px; }
 .badge { font-size: 0.72rem; font-weight: 700; padding: 4px 9px; border-radius: 99px; background: var(--line); color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
-.badge-demo { background: #fff1d6; color: #9a6400; }
+.badge-demo { background: var(--demo-bg); color: var(--demo-ink); }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.theme-toggle {
+  display: grid; place-items: center; width: 40px; height: 40px; padding: 0; cursor: pointer;
+  border-radius: 50%; border: 2px solid var(--line); background: var(--surface); color: var(--ink);
+}
+.theme-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.theme-toggle svg { width: 20px; height: 20px; }
+.theme-toggle .icon-moon { fill: currentColor; }
+.theme-toggle .icon-sun { fill: none; stroke: var(--gold); stroke-width: 2; stroke-linecap: round; }
+.theme-toggle .icon-sun circle { fill: var(--gold); stroke: none; }
+.theme-toggle .icon-sun, [data-theme='dark'] .theme-toggle .icon-moon { display: none; }
+[data-theme='dark'] .theme-toggle .icon-sun { display: block; }
 
 .page { max-width: 520px; margin: 0 auto; padding: 4px 16px calc(env(safe-area-inset-bottom) + 32px); display: flex; flex-direction: column; gap: 14px; }
 .center-page { min-height: 70vh; align-items: center; justify-content: center; text-align: center; }
@@ -86,8 +112,7 @@ a { color: inherit; }
 .btn:active { transform: scale(0.98); }
 .btn:disabled { opacity: 0.5; cursor: default; transform: none; }
 .btn-primary { background: linear-gradient(135deg, var(--gold-2), var(--gold)); color: #1f2348; }
-.btn-secondary { background: var(--ink); color: var(--surface); }
-@media (prefers-color-scheme: dark) { .btn-secondary { background: #343a78; color: #fff; } }
+.btn-secondary { background: var(--secondary-bg); color: var(--secondary-ink); }
 .btn-ghost { background: transparent; border: 2px solid var(--line); color: var(--ink); }
 .btn-danger { background: var(--bad); color: #fff; }
 .btn-danger-ghost { background: transparent; color: var(--bad); border: 2px solid color-mix(in srgb, var(--bad) 35%, transparent); }
@@ -143,6 +168,7 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 
 .keeper-card { background: linear-gradient(135deg, #1f2348, #2e3470); color: #fff; }
 .keeper-card p { color: #d4d6f0; }
+[data-theme='dark'] .keeper-card { background: linear-gradient(135deg, #2a2f66, #3a2f5c); border: 1px solid #3d4380; }
 .keeper-card .btn-secondary { background: linear-gradient(135deg, var(--gold-2), var(--gold)); color: #1f2348; }
 
 .timeline, .past { list-style: none; margin: 0; padding: 0; }
@@ -175,3 +201,4 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 .spinner.big { width: 36px; height: 36px; border-width: 4px; color: var(--gold); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation-duration: 2s !important; } }
+@media (prefers-reduced-motion: reduce) { .theme-anim, .theme-anim * { transition: none !important; } }
