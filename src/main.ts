@@ -38,20 +38,51 @@ function route(): void {
   })
 }
 
+type Field = HTMLInputElement | HTMLSelectElement
+const fieldKey = (el: Field) => `${el.form?.id ?? ''}|${el.name}|${el instanceof HTMLInputElement && el.type === 'radio' ? el.value : ''}`
+
+/** Re-render without losing what the user has typed or selected in the current view's forms. */
+function rerenderPreservingForms(): void {
+  const saved = new Map<string, string | boolean>()
+  root.querySelectorAll<Field>('form input[name], form select[name]').forEach((el) => {
+    const radio = el instanceof HTMLInputElement && (el.type === 'radio' || el.type === 'checkbox')
+    saved.set(fieldKey(el), radio ? (el as HTMLInputElement).checked : el.value)
+  })
+  const focused = document.activeElement
+  const focusKey = focused instanceof HTMLInputElement || focused instanceof HTMLSelectElement ? fieldKey(focused) : null
+  route()
+  root.querySelectorAll<Field>('form input[name], form select[name]').forEach((el) => {
+    const v = saved.get(fieldKey(el))
+    if (v === undefined) return
+    if (typeof v === 'boolean') (el as HTMLInputElement).checked = v
+    else if (el instanceof HTMLSelectElement && ![...el.options].some((o) => o.value === v)) return
+    else el.value = v
+    // Let the view recompute hints (fiat conversions etc.) and show/hide dependent fields.
+    if (typeof v === 'string' && v) el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+    if (fieldKey(el) === focusKey) el.focus()
+  })
+}
+
 let scheduled = false
+let pendingForce = false
 let deferred = false
 onChange((force) => {
-  // Background refreshes must not wipe what the user is typing or an open sheet; retry on blur.
+  // Background refreshes wait while the user is typing or a sheet is open; retry on blur.
   const typing = document.activeElement instanceof HTMLInputElement && !!document.activeElement.value
   if (!force && (typing || document.querySelector('.sheet-backdrop'))) {
     deferred = true
     return
   }
+  pendingForce ||= force
   if (scheduled) return
   scheduled = true
   requestAnimationFrame(() => {
     scheduled = false
-    route()
+    const wasForced = pendingForce
+    pendingForce = false
+    // User actions (create goal, lock...) render fresh; background data keeps form input.
+    if (wasForced) route()
+    else rerenderPreservingForms()
   })
 })
 window.addEventListener('hashchange', route)
@@ -60,7 +91,7 @@ document.addEventListener('focusout', () => {
   setTimeout(() => {
     if (deferred && !(document.activeElement instanceof HTMLInputElement) && !document.querySelector('.sheet-backdrop')) {
       deferred = false
-      route()
+      rerenderPreservingForms()
     }
   }, 300)
 })
