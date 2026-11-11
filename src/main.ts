@@ -2,7 +2,7 @@ import './style.css'
 import { attachWallet, ctx, onChange, refreshChain, refreshPrices } from './app'
 import { decodeKeeper } from './lib/share'
 import { initTheme, syncToggle, toggleTheme } from './lib/theme'
-import { connectNimiqPay, createDemoWallet, errorMessage, insideNimiqPay, isUserRejection } from './lib/wallet'
+import { connectNimiqPay, errorMessage, insideNimiqPay, isUserRejection } from './lib/wallet'
 import { html } from './ui'
 import { header } from './views/common'
 import { renderKeeper } from './views/keeper'
@@ -15,7 +15,6 @@ initTheme()
 let conn: 'outside' | 'connecting' | 'failed' = insideNimiqPay() ? 'connecting' : 'outside'
 let connError = ''
 const CONNECT_TIMEOUT_MS = 20_000
-const startDemo = () => void attachWallet(createDemoWallet())
 
 // Views re-render often, so the theme switch uses one delegated listener.
 document.addEventListener('click', (e) => {
@@ -38,8 +37,8 @@ function route(): void {
   }
   if (ctx.wallet) return renderHome(root)
   if (conn === 'connecting') return renderConnecting(root)
-  if (conn === 'failed') return renderConnectFailed(root, connError, () => void connect(), startDemo)
-  renderLanding(root, startDemo)
+  if (conn === 'failed') return renderConnectFailed(root, connError, () => void connect())
+  renderLanding(root)
 }
 
 type Field = HTMLInputElement | HTMLSelectElement

@@ -18,13 +18,13 @@ import { keeperUrl, type KeeperPayload } from '../lib/share'
 import { errorMessage, isUserRejection } from '../lib/wallet'
 import { isMobileDevice, miniAppUrl, NIMIQ_PAY_INSTALL_URL, nimiqPayDeepLink } from '../lib/deeplink'
 import { $, $$, busy, copyText, html, openSheet, raw, ring, toast, type Raw } from '../ui'
-import { demoBadge, fiatRow, header, nim } from './common'
+import { fiatRow, header, nim } from './common'
 
 const EMOJIS = ['🎯', '🏠', '🎓', '✈️', '🚗', '💍', '📱', '🛡️', '👶', '💻', '🏥', '🎁']
 
 // ---------- Landing (not connected) ----------
 
-export function renderLanding(root: HTMLElement, onDemo: () => void): void {
+export function renderLanding(root: HTMLElement): void {
   const deepLink = nimiqPayDeepLink()
   const pasteUrl = miniAppUrl()
   const mobile = isMobileDevice()
@@ -61,12 +61,7 @@ export function renderLanding(root: HTMLElement, onDemo: () => void): void {
       <li><b>🛡️ Goalkeeper</b><span>Share a link with one friend. They see your progress, send a cheer in NIM and see if you break the seal.</span></li>
       <li><b>💵 Dollar view</b><span>Every goal in NIM, USDT and NGN.</span></li>
     </ol>
-    <div class="card center">
-      <p class="muted">Just want to look around? The demo uses a pretend wallet. No real NIM moves.</p>
-      <button class="btn btn-ghost" id="demo">Try the demo</button>
-    </div>
   </main>`.html
-  $('#demo', root)!.addEventListener('click', onDemo)
   // If Nimiq Pay doesn't take over within a few seconds, show the manual way in.
   $('#open-nimiq-pay', root)!.addEventListener('click', () => {
     window.setTimeout(() => {
@@ -89,18 +84,16 @@ export function renderConnecting(root: HTMLElement): void {
 }
 
 /** Shown instead of an endless spinner when Nimiq Pay doesn't answer or the user declines. */
-export function renderConnectFailed(root: HTMLElement, message: string, onRetry: () => void, onDemo: () => void): void {
+export function renderConnectFailed(root: HTMLElement, message: string, onRetry: () => void): void {
   root.innerHTML = html`${header()}
   <main class="page center-page">
     <div class="connect-icon" aria-hidden="true">🔌</div>
     <h2>Wallet not connected</h2>
     <p class="muted">${message}</p>
     <button class="btn btn-primary" id="retry">Connect Nimiq Pay</button>
-    <button class="btn btn-link" id="demo">Try the demo instead</button>
     <p class="muted small">Holdfast only reads your wallet address. It can't move NIM without your approval.</p>
   </main>`.html
   $('#retry', root)!.addEventListener('click', onRetry)
-  $('#demo', root)!.addEventListener('click', onDemo)
 }
 
 // ---------- Home (connected) ----------
@@ -127,7 +120,7 @@ function renderNewGoal(root: HTMLElement): void {
   void loadValidators()
   const units = ['nim', ...ctx.fiats.filter((f) => ctx.prices?.rates[f])]
   const validatorOptions = ctx.validators.slice(0, 25)
-  root.innerHTML = html`${header(demoBadge())}
+  root.innerHTML = html`${header()}
   <main class="page">
     <section class="hero small">
       <h1>Start a goal</h1>
@@ -223,7 +216,7 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
   const left = Math.max(0, goal.targetLuna - saved)
   const rewards = ctx.stake ? saved - goal.lockedLuna : 0
   const source = ctx.stake ? 'Live from the Nimiq blockchain' : 'From your Holdfast ledger'
-  root.innerHTML = html`${header(demoBadge())}
+  root.innerHTML = html`${header()}
   <main class="page">
     <section class="goal-hero ${goal.sealBrokenAt ? 'broken' : ''} ${goal.reachedAt ? 'reached' : ''}">
       <div class="ring-wrap">

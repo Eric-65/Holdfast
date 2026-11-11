@@ -5,7 +5,6 @@ import { init, NimiqProviderError, getHostFiat, getHostNetwork, type NimiqProvid
  * or funds: every money movement is a transaction the user signs in Nimiq Pay.
  */
 export interface Wallet {
-  readonly mode: 'nimiq-pay' | 'demo'
   listAccounts(): Promise<string[]>
   getBalance(address: string): Promise<number>
   sendBasicTransactionWithData(tx: { recipient: string; value: number; data: string }): Promise<string>
@@ -35,7 +34,6 @@ export function errorMessage(err: unknown): string {
 
 function wrap(p: NimiqProvider): Wallet {
   return {
-    mode: 'nimiq-pay',
     listAccounts: () => p.listAccounts(),
     getBalance: (a) => p.getBalance(a),
     sendBasicTransactionWithData: (tx) => p.sendBasicTransactionWithData(tx),
@@ -45,50 +43,6 @@ function wrap(p: NimiqProvider): Wallet {
     sendRetireStakeTransaction: (tx) => p.sendRetireStakeTransaction(tx),
     sendRemoveStakeTransaction: (tx) => p.sendRemoveStakeTransaction(tx),
     onAccountsChanged: (cb) => void p.on('accountsChanged', cb),
-  }
-}
-
-/**
- * Demo wallet for trying Holdfast in a normal browser. It is clearly labelled in the UI,
- * keeps a fake balance in memory and never touches a real network.
- */
-export function createDemoWallet(): Wallet {
-  const address = 'NQ07 0000 0000 0000 0000 0000 0000 0000 0000'
-  let balance = 5_000 * 100_000
-  const fakeHash = () => Array.from({ length: 64 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('')
-  const confirm = async (label: string) => {
-    await new Promise((r) => setTimeout(r, 350))
-    if (!window.confirm(`[Demo wallet]\n${label}\n\nApprove this simulated transaction?`))
-      throw Object.assign(new Error('User rejected the request'), { code: 4001, type: 'USER_REJECTED' })
-    return fakeHash()
-  }
-  const nim = (l: number) => (l / 100_000).toLocaleString('en-US')
-  return {
-    mode: 'demo',
-    listAccounts: async () => [address],
-    getBalance: async () => balance,
-    sendBasicTransactionWithData: async (tx) => {
-      const h = await confirm(`Send ${nim(tx.value)} NIM to ${tx.recipient}\nMessage: ${tx.data}`)
-      return h
-    },
-    sendNewStakerTransaction: async (tx) => {
-      const h = await confirm(`Stake ${nim(tx.value)} NIM with validator ${tx.delegation}`)
-      balance -= tx.value
-      return h
-    },
-    sendStakeTransaction: async (tx) => {
-      const h = await confirm(`Add ${nim(tx.value)} NIM to your stake`)
-      balance -= tx.value
-      return h
-    },
-    sendSetActiveStakeTransaction: (tx) => confirm(`Set active stake to ${nim(tx.newActiveBalance)} NIM`),
-    sendRetireStakeTransaction: (tx) => confirm(`Retire ${nim(tx.retireStake)} NIM of inactive stake`),
-    sendRemoveStakeTransaction: async (tx) => {
-      const h = await confirm(`Return ${nim(tx.value)} NIM from staking to your wallet`)
-      balance += tx.value
-      return h
-    },
-    onAccountsChanged: () => {},
   }
 }
 

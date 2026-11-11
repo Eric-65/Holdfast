@@ -13,7 +13,7 @@ Built for the Nimiq Mini Apps Competition, Cycle III (Save category).
   <img src="docs/goalkeeper.png" width="200" alt="The Goalkeeper page a friend sees">
 </p>
 
-<sub>Screenshots are from demo mode with sample prices.</sub>
+<sub>Screenshots use sample prices.</sub>
 
 ---
 
@@ -63,16 +63,13 @@ Holdfast shows each step and tells you what to do next.
 - **In Nimiq Pay:** Holdfast connects to your wallet by itself. Nimiq Pay may ask you to approve sharing your wallet address. If the wallet doesn't answer or you decline, Holdfast shows a **Connect Nimiq Pay** button to try again.
 - **In a normal browser:** Holdfast tells you that you're outside Nimiq Pay and shows an **Open in Nimiq Pay** button. On a phone with Nimiq Pay installed, it opens the app there directly. If nothing happens, Holdfast shows the address to paste into Nimiq Pay under *Mini Apps → Custom URL*.
 
-### Demo mode
-Open Holdfast in a normal browser and tap **Try the demo**. A pretend wallet with 5,000 NIM lets you try every step. No real money moves, and a **DEMO** badge is always shown.
-
 ---
 
 ## What's built and tested
 
 | Area | Status |
 |---|---|
-| Goal creation, locking, the full 3-step withdrawal, Goalkeeper sharing, cheers, theme switch | ✅ Built. Tested end to end in a mobile browser using demo mode |
+| Goal creation, locking, the full 3-step withdrawal, Goalkeeper sharing, cheers, theme switch | ✅ Built. Tested end to end in a mobile browser with a simulated Nimiq Pay wallet |
 | Wallet connection screens (approved, declined, no answer, retry) | ✅ Tested in a browser with a simulated Nimiq Pay wallet |
 | **Open in Nimiq Pay** button | ⚠️ Built from the documented link format. Needs a check on a phone with Nimiq Pay installed |
 | Amount parsing, Nimiq address checks, goal history, share links, API data parsing | ✅ 19 automated tests |
@@ -92,7 +89,7 @@ npm install
 npm run dev
 ```
 
-Open the address it prints (usually http://localhost:5173) and tap **Try the demo**.
+Open the address it prints (usually http://localhost:5173). In a normal browser you'll see the landing page; saving and locking need Nimiq Pay (see below).
 
 | Command | What it does |
 |---|---|

@@ -45,7 +45,7 @@ export function cheerData(message: string): string {
 
 export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
   const live: KeeperLive = { stake: null, loading: chainAvailable() }
-  let friendWallet: Wallet | null = ctx.wallet && ctx.wallet.mode === 'nimiq-pay' ? ctx.wallet : null
+  let friendWallet: Wallet | null = ctx.wallet
 
   const draw = () => {
     const onChain = live.stake !== null

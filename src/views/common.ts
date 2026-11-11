@@ -35,9 +35,3 @@ export function header(right: Raw | string = ''): Raw {
     <div class="topbar-right">${right}${themeToggle}</div>
   </header>`
 }
-
-export function demoBadge(): Raw {
-  return ctx.wallet?.mode === 'demo'
-    ? html`<span class="badge badge-demo" title="Simulated wallet. No real NIM moves.">Demo</span>`
-    : html``
-}
