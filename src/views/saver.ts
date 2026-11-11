@@ -420,7 +420,7 @@ function breakSeal(goal: Goal): void {
         <label>Amount to withdraw
           <div class="amount-input"><input name="amount" inputmode="decimal" value="${toNim(max)}"/><span class="unit">NIM</span></div>
         </label>
-        <label>Type <b>${goal.name}</b> to confirm
+        <label><span>Type <b>${goal.name}</b> to confirm</span>
           <input name="confirm" autocomplete="off" spellcheck="false"/>
         </label>
         <button class="btn btn-danger" type="submit" disabled>Break the seal</button>
