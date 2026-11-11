@@ -1,8 +1,8 @@
-# Holdfast
+# Holdfast Savings
 
 **Save it. Stake it. Hold fast.**
 
-Holdfast is a savings app that runs inside the **Nimiq Pay** wallet. When you save toward a goal, your NIM is staked: it stays in your own wallet, earns rewards and is harder to spend on impulse. A friend you trust keeps you on track.
+Holdfast Savings is a savings app that runs inside the **Nimiq Pay** wallet. When you save toward a goal, your NIM is staked: it stays in your own wallet, earns rewards and is harder to spend on impulse. A friend you trust keeps you on track.
 
 Built for the Nimiq Mini Apps Competition, Cycle III (Save category).
 
