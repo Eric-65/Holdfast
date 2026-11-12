@@ -30,6 +30,7 @@ Built for the Nimiq Mini Apps Competition, Cycle III (Save category).
 | 🔒 **Lock it** | Saving into a goal **stakes NIM from your own wallet**. Your money never leaves your control and it earns staking rewards. Getting it back takes Nimiq's unstaking cool-down, which slows down impulse withdrawals. |
 | 🛡️ **Goalkeeper** | You share a link with one trusted friend. Without signing up, they can see your progress, send you a **cheer** (a NIM gift with a message) and see if you **break the seal** (start withdrawing). |
 | 💵 **Dollar view** | Every amount shows in **NIM, USDT and NGN**. You can also set your target in USDT or naira. |
+| 👤 **Profiles & invites** | Your wallet is your account. You get a display name you can edit and your own invite link. Every new wallet that joins through your link counts as your referral, and a public **leaderboard** ranks savers by referrals. |
 | 🌗 **Light & dark theme** | Follows your phone's setting. Tap the sun/moon button to switch, and Holdfast remembers your choice. |
 
 **Holdfast never holds your money.** Every transaction is shown and signed by you in Nimiq Pay.
@@ -63,6 +64,25 @@ Holdfast shows each step and tells you what to do next.
 - **In Nimiq Pay:** Holdfast connects to your wallet by itself. Nimiq Pay may ask you to approve sharing your wallet address. If the wallet doesn't answer or you decline, Holdfast shows a **Connect Nimiq Pay** button to try again.
 - **In a normal browser:** Holdfast tells you that you're outside Nimiq Pay and shows an **Open in Nimiq Pay** button. On a phone with Nimiq Pay installed, it opens the app there directly. If nothing happens, Holdfast shows the address to paste into Nimiq Pay under *Mini Apps → Custom URL*.
 
+### Profiles, invites and the leaderboard
+1. **Create your profile.** The first time your wallet connects, Holdfast offers to create your profile. You sign one message in Nimiq Pay. It is free, moves no NIM, and proves the wallet address is yours.
+2. **Name and invite link.** Your profile gets a display name (tap **Edit name** to change it) and a unique invite link like `https://holdfast-puce.vercel.app/i/ABC2345`.
+3. **Referrals.** When someone opens your link and creates their own profile with a wallet that is new to Holdfast, they count as your referral and appear on your profile. A wallet counts once, and you cannot refer yourself.
+4. **Leaderboard.** The 🏆 tab ranks profiles by referrals. Anyone can view it, with or without a wallet. It shows display names and shortened addresses.
+
+**What Holdfast stores for each profile**, as evidence that it is a real, unique user:
+
+| Stored | Why |
+|---|---|
+| Wallet address, public key and display name | The profile itself |
+| The signed message and wallet signature | Proof that the wallet's owner created the profile |
+| Nimiq Pay device identifier | An anonymous ID for the phone. Nimiq Pay asks the user first, and it is left empty if they decline |
+| Browser ID (cookie + localStorage) | A random anonymous ID, to notice many wallets coming from one browser |
+| Joined and last-seen times | When the profile was created and last used |
+| Country | From the hosting platform's location header. The IP address itself is not stored |
+
+Each profile also records how many wallets had already used the same device and browser when it joined, so duplicate sign-ups are easy to spot. By default every new wallet counts as a referral. Set `HF_REQUIRE_UNIQUE_DEVICE=1` to stop counting wallets that come from a device or browser already seen.
+
 ---
 
 ## What's built and tested
@@ -72,7 +92,8 @@ Holdfast shows each step and tells you what to do next.
 | Goal creation, locking, the full 3-step withdrawal, Goalkeeper sharing, cheers, theme switch | ✅ Built. Tested end to end in a mobile browser with a simulated Nimiq Pay wallet |
 | Wallet connection screens (approved, declined, no answer, retry) | ✅ Tested in a browser with a simulated Nimiq Pay wallet |
 | **Open in Nimiq Pay** button | ⚠️ Built from the documented link format. Needs a check on a phone with Nimiq Pay installed |
-| Amount parsing, Nimiq address checks, goal history, share links, API data parsing | ✅ 19 automated tests |
+| Profiles, sign-in with a wallet signature, invite links, referrals, leaderboard | ✅ Built. Tested in a browser with simulated wallets that sign the way Nimiq wallets do. Needs a check with real Nimiq Pay signatures |
+| Amount parsing, address checks, goal history, share links, sign-in and referral rules | ✅ 36 automated tests |
 | Real staking transactions inside Nimiq Pay | ⚠️ Built with the official Nimiq SDK. Needs a final check on a real device |
 | Live progress straight from the blockchain | ⚙️ Works when an RPC address is set (see [Settings](#settings)). Otherwise it uses Holdfast's own records |
 
@@ -109,18 +130,32 @@ All settings are optional. To use them, copy `.env.example` to `.env`.
 | `VITE_NIMIQ_RPC_URL` | A Nimiq RPC server that allows browser requests. It turns on **live** blockchain progress (including staking rewards) and live withdrawal alerts for Goalkeepers. Without it, Goalkeepers see the snapshot saved in their link. |
 | `VITE_VALIDATORS_API_URL` | Where to load the validator list from |
 | `VITE_PRICE_API_URL` | Where to load NIM prices from (CoinGecko format) |
+| `VITE_API_BASE` | Where the Holdfast API lives, if it is not on the same site as the app |
+
+Server settings (set on the host, not in `.env`):
+
+| Setting | Purpose |
+|---|---|
+| `KV_REST_API_URL`, `KV_REST_API_TOKEN` | The Upstash Redis database that holds profiles and referrals. Vercel sets these for you when you connect the database (see [Deploy](#deploy)). `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` work too. |
+| `HF_REQUIRE_UNIQUE_DEVICE` | Set to `1` to count a referral only when the device and browser are new to Holdfast |
 
 ### Deploy
 
-The built app is a plain static website, so any static host works. The included GitHub Actions workflow runs the tests on every push. On `main`, if they pass, it publishes the app to GitHub Pages, so a broken build never goes live. To turn it on, go to **Settings → Pages → Source: GitHub Actions**.
+Holdfast runs on **Vercel** at https://holdfast-puce.vercel.app. Vercel builds the app and serves the API in `api/` from every push to `main`.
+
+**Turning on profiles (one-time):** profiles need a database. In the Vercel project, open **Storage → Create Database → Upstash → Redis** (the free plan is enough), connect it to the project, then redeploy. Until that is done the app works exactly as before: goals, locking and Goalkeeper links all work, and the profile and leaderboard screens stay hidden.
+
+The goals part of the app is a plain static website, so it also runs on any static host, without profiles. The GitHub Actions workflow runs the tests and the build on every push. It can also publish to GitHub Pages if you set the repository variable `DEPLOY_TO_PAGES` to `true` and enable Pages.
 
 ---
 
 ## Under the hood
 
-- **Tech:** Vite and TypeScript, with no UI framework (about 17 kB of JavaScript, gzipped).
+- **Tech:** Vite and TypeScript, with no UI framework (about 23 kB of JavaScript, gzipped).
 - **Wallet:** [`@nimiq/mini-app-sdk`](https://www.npmjs.com/package/@nimiq/mini-app-sdk). The first lock creates a staker, later locks add to it, and withdrawals use the deactivate, retire and remove steps.
-- **Storage:** your goals are saved on your device, separately for each wallet address.
+- **Storage:** your goals are saved on your device, separately for each wallet address. Profiles and referrals are saved in the database.
+- **Sign-in:** the server issues a one-time message, the wallet signs it, and the server checks the Ed25519 signature and derives the address from the signing key. A profile can only be created by the wallet's owner.
+- **Invite links:** `/i/CODE` redirects to `/?ref=CODE`. The code is remembered on the device until the profile is created, including across the jump from a browser into Nimiq Pay.
 - **Goalkeeper link:** the goal details sit in the part of the link after `#`, which browsers never send to a server.
 - **Open in Nimiq Pay:** the button uses Nimiq Pay's `nimiqpay://miniapp?url=…` link.
 - **Prices:** NIM prices from CoinGecko, converted to USDT with the live USDT rate, refreshed every 5 minutes. If it can't be reached, Holdfast shows the last known price.
@@ -129,9 +164,13 @@ The built app is a plain static website, so any static host works. The included 
 src/
   main.ts        app start-up and page routing
   app.ts         shared app state
-  lib/           wallet, blockchain, prices, goals, share links, theme
-  views/         saver screens and the Goalkeeper page
+  account.ts     profile sign-in, rename and invites
+  lib/           wallet, blockchain, prices, goals, share links, theme, API client
+  views/         saver screens, Goalkeeper page, profile and leaderboard
   style.css      all styles, including light and dark themes
+api/
+  hf.ts          the API (one serverless function)
+  _lib/          sign-in and referral rules, signature checks, database access
 tests/           automated tests
 ```
 
@@ -140,6 +179,8 @@ tests/           automated tests
 - Nimiq counts all of a wallet's stake together, so Holdfast runs **one goal at a time**. Stake you already had before creating a goal doesn't count toward it.
 - Cheers arrive in the saver's normal balance. The saver can then lock them into the goal.
 - Without an RPC address, Goalkeepers see progress as of when the link was shared. Re-share it to update.
+- Goals stay on the device. A profile does not yet sync goals between phones.
+- One person with several wallets can still create several profiles. The stored device and browser IDs make this visible, and `HF_REQUIRE_UNIQUE_DEVICE=1` stops such wallets counting as referrals.
 
 ## License
 

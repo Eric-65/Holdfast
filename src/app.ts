@@ -3,6 +3,13 @@ import { getPrices, type PriceState } from './lib/prices'
 import { loadState, saveState, type StoreState } from './lib/store'
 import { hostFiat, type Wallet } from './lib/wallet'
 import { toNim } from './lib/format'
+import type { OwnProfile } from './lib/api'
+
+/**
+ * unknown: not checked yet. unavailable: this deployment has no profile service.
+ * signed_out: the wallet has not signed in on this device. ready: profile loaded.
+ */
+export type ProfileStatus = 'unknown' | 'unavailable' | 'signed_out' | 'ready'
 
 export interface AppCtx {
   wallet: Wallet | null
@@ -16,6 +23,12 @@ export interface AppCtx {
   validatorsLoaded: boolean
   /** Currencies shown next to NIM: USDT and NGN always, plus the host's currency (never plain USD). */
   fiats: string[]
+  /** Whether this deployment has the profile service. null until checked. */
+  apiAvailable: boolean | null
+  profile: OwnProfile | null
+  profileStatus: ProfileStatus
+  /** The invite this visitor arrived with, once its code has been checked. */
+  invite: { code: string; name: string } | null
 }
 
 export const ctx: AppCtx = {
@@ -28,6 +41,10 @@ export const ctx: AppCtx = {
   prices: null,
   validators: [],
   validatorsLoaded: false,
+  apiAvailable: null,
+  profile: null,
+  profileStatus: 'unknown',
+  invite: null,
   fiats: (() => {
     const base = ['usdt', 'ngn']
     const h = hostFiat()

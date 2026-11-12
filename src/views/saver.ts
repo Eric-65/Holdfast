@@ -16,7 +16,8 @@ import {
 } from '../lib/store'
 import { keeperUrl, type KeeperPayload } from '../lib/share'
 import { errorMessage, isUserRejection } from '../lib/wallet'
-import { isMobileDevice, miniAppUrl, NIMIQ_PAY_INSTALL_URL, nimiqPayDeepLink } from '../lib/deeplink'
+import { isMobileDevice, miniAppTarget, miniAppUrl, NIMIQ_PAY_INSTALL_URL, nimiqPayDeepLink } from '../lib/deeplink'
+import { pendingInviteCode } from '../lib/identity'
 import { $, $$, busy, copyText, html, openSheet, raw, ring, toast, type Raw } from '../ui'
 import { fiatRow, header, nim } from './common'
 
@@ -25,11 +26,14 @@ const EMOJIS = ['🎯', '🏠', '🎓', '✈️', '🚗', '💍', '📱', '🛡�
 // ---------- Landing (not connected) ----------
 
 export function renderLanding(root: HTMLElement): void {
-  const deepLink = nimiqPayDeepLink()
-  const pasteUrl = miniAppUrl()
+  // An invited visitor keeps their invite code when they move over to Nimiq Pay.
+  const inviteCode = ctx.invite?.code ?? pendingInviteCode()
+  const deepLink = nimiqPayDeepLink(miniAppTarget(location, inviteCode))
+  const pasteUrl = miniAppUrl(location, inviteCode)
   const mobile = isMobileDevice()
   root.innerHTML = html`${header()}
   <main class="page landing">
+    ${ctx.invite ? html`<p class="invite-banner">🎉 <b>${ctx.invite.name}</b> invited you to Holdfast</p>` : ''}
     <section class="card outside-card">
       <div class="outside-head">
         <span class="outside-icon" aria-hidden="true">📱</span>
@@ -61,6 +65,7 @@ export function renderLanding(root: HTMLElement): void {
       <li><b>🛡️ Goalkeeper</b><span>Share a link with one friend. They see your progress, send a cheer in NIM and see if you break the seal.</span></li>
       <li><b>💵 Dollar view</b><span>Every goal in NIM, USDT and NGN.</span></li>
     </ol>
+    ${ctx.apiAvailable ? html`<a class="btn btn-ghost" href="#/board">🏆 See the leaderboard</a>` : ''}
   </main>`.html
   // If Nimiq Pay doesn't take over within a few seconds, show the manual way in.
   $('#open-nimiq-pay', root)!.addEventListener('click', () => {

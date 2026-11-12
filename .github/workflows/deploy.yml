@@ -1,4 +1,4 @@
-name: Test & deploy to GitHub Pages
+name: Test & build
 
 on:
   push:
@@ -34,8 +34,9 @@ jobs:
           path: dist
 
   deploy:
-    # Only deploy from main, and only after tests + build pass, so the live app never breaks.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    # The live app is hosted on Vercel. Publishing to GitHub Pages as well is opt-in:
+    # set the repository variable DEPLOY_TO_PAGES to "true" and enable Pages.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.DEPLOY_TO_PAGES == 'true'
     needs: build
     runs-on: ubuntu-latest
     environment:

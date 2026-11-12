@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { decodeKeeper, encodeKeeper, keeperUrl, nimiqPaymentUri, type KeeperPayload } from '../src/lib/share'
-import { miniAppTarget, miniAppUrl, nimiqPayDeepLink } from '../src/lib/deeplink'
+import { inviteUrl, miniAppTarget, miniAppUrl, nimiqPayDeepLink } from '../src/lib/deeplink'
 import { cheerData } from '../src/views/keeper'
 import { parseValidators, normalizeStaker } from '../src/lib/chain'
 import { parsePriceResponse } from '../src/lib/prices'
@@ -39,7 +39,16 @@ describe('open in Nimiq Pay links', () => {
   it('uses the bare host for a root deploy and the full URL for a sub-path', () => {
     expect(miniAppTarget({ origin: 'https://holdfast.app', host: 'holdfast.app', pathname: '/' })).toBe('holdfast.app')
     expect(miniAppTarget({ origin: 'https://me.github.io', host: 'me.github.io', pathname: '/Holdfast/index.html' })).toBe('https://me.github.io/Holdfast/')
-    expect(miniAppUrl({ origin: 'https://me.github.io', pathname: '/Holdfast/' })).toBe('https://me.github.io/Holdfast/')
+    expect(miniAppUrl({ origin: 'https://me.github.io', host: 'me.github.io', pathname: '/Holdfast/' })).toBe('https://me.github.io/Holdfast/')
+  })
+  it('builds invite links that survive the Nimiq Pay deep link', () => {
+    const root = { origin: 'https://holdfast.app', host: 'holdfast.app', pathname: '/' }
+    const sub = { origin: 'https://me.github.io', host: 'me.github.io', pathname: '/Holdfast/' }
+    expect(inviteUrl('ABC2345', root)).toBe('https://holdfast.app/i/ABC2345')
+    expect(inviteUrl('ABC2345', sub)).toBe('https://me.github.io/Holdfast/?ref=ABC2345')
+    // An invited visitor's "Open in Nimiq Pay" button and paste address carry the code along.
+    expect(nimiqPayDeepLink(miniAppTarget(root, 'ABC2345'))).toBe('nimiqpay://miniapp?url=https://holdfast.app/i/ABC2345')
+    expect(miniAppUrl(root, 'ABC2345')).toBe('https://holdfast.app/i/ABC2345')
   })
   it('keeps : and / literal and encodes everything else', () => {
     expect(nimiqPayDeepLink('holdfast.app')).toBe('nimiqpay://miniapp?url=holdfast.app')

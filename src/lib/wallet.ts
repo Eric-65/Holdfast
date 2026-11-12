@@ -1,4 +1,4 @@
-import { init, NimiqProviderError, getHostFiat, getHostNetwork, type NimiqProvider } from '@nimiq/mini-app-sdk'
+import { init, NimiqProviderError, getHostFiat, getHostNetwork, requestDeviceIdentifier, type NimiqProvider } from '@nimiq/mini-app-sdk'
 
 /**
  * The subset of the Nimiq Pay provider Holdfast uses. Holdfast never holds keys
@@ -7,6 +7,8 @@ import { init, NimiqProviderError, getHostFiat, getHostNetwork, type NimiqProvid
 export interface Wallet {
   listAccounts(): Promise<string[]>
   getBalance(address: string): Promise<number>
+  /** Sign a text message with the wallet key. Proves ownership; moves no funds. */
+  sign(message: string): Promise<{ publicKey: string; signature: string }>
   sendBasicTransactionWithData(tx: { recipient: string; value: number; data: string }): Promise<string>
   sendNewStakerTransaction(tx: { delegation: string; value: number }): Promise<string>
   sendStakeTransaction(tx: { value: number }): Promise<string>
@@ -36,6 +38,7 @@ function wrap(p: NimiqProvider): Wallet {
   return {
     listAccounts: () => p.listAccounts(),
     getBalance: (a) => p.getBalance(a),
+    sign: (message) => p.sign(message),
     sendBasicTransactionWithData: (tx) => p.sendBasicTransactionWithData(tx),
     sendNewStakerTransaction: (tx) => p.sendNewStakerTransaction(tx),
     sendStakeTransaction: (tx) => p.sendStakeTransaction(tx),
@@ -43,6 +46,19 @@ function wrap(p: NimiqProvider): Wallet {
     sendRetireStakeTransaction: (tx) => p.sendRetireStakeTransaction(tx),
     sendRemoveStakeTransaction: (tx) => p.sendRemoveStakeTransaction(tx),
     onAccountsChanged: (cb) => void p.on('accountsChanged', cb),
+  }
+}
+
+/**
+ * Anonymous per-device ID from Nimiq Pay (it asks the user the first time).
+ * Resolves to null if the user declines or the host does not support it.
+ */
+export async function deviceIdentifier(reason: string): Promise<string | null> {
+  try {
+    const id = await requestDeviceIdentifier({ reason })
+    return typeof id === 'string' && /^[0-9a-f]{64}$/i.test(id) ? id : null
+  } catch {
+    return null
   }
 }
 

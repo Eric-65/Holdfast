@@ -1,0 +1,4 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "redirects": [{ "source": "/i/:code([A-Za-z0-9]{5,12})", "destination": "/?ref=:code", "permanent": false }]
+}

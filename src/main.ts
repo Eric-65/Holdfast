@@ -1,5 +1,7 @@
 import './style.css'
+import { checkApi, loadInvite, loadProfile } from './account'
 import { attachWallet, ctx, onChange, refreshChain, refreshPrices } from './app'
+import { captureInviteCode, wasWelcomed } from './lib/identity'
 import { decodeKeeper } from './lib/share'
 import { initTheme, syncToggle, toggleTheme } from './lib/theme'
 import { connectNimiqPay, errorMessage, insideNimiqPay, isUserRejection } from './lib/wallet'
@@ -7,9 +9,12 @@ import { html } from './ui'
 import { header } from './views/common'
 import { renderKeeper } from './views/keeper'
 import { renderConnectFailed, renderConnecting, renderHome, renderLanding } from './views/saver'
+import { openWelcomeSheet, renderBoard, renderProfile, tabBar } from './views/social'
 
 const root = document.getElementById('app')!
 initTheme()
+// An invite link lands as ?ref=CODE. Remember the code now; it is used when the profile is created.
+captureInviteCode()
 
 /** outside: normal browser. connecting: waiting on Nimiq Pay. failed: it declined or didn't answer. */
 let conn: 'outside' | 'connecting' | 'failed' = insideNimiqPay() ? 'connecting' : 'outside'
@@ -25,20 +30,35 @@ new MutationObserver(() => document.querySelectorAll<HTMLButtonElement>('.theme-
   childList: true,
 })
 
+/** Draw the current screen, then the bottom navigation for connected wallets. */
 function route(): void {
+  const tab = renderRoute()
+  const social = !!ctx.wallet && ctx.apiAvailable === true
+  document.body.classList.toggle('has-tabs', social && tab !== null)
+  if (social && tab) root.insertAdjacentHTML('beforeend', tabBar(tab).html)
+}
+
+function renderRoute(): 'goal' | 'board' | 'me' | null {
   const hash = location.hash.replace(/^#/, '')
   const keep = hash.match(/^\/keep\/([A-Za-z0-9_-]+)/)
   if (keep) {
     const payload = decodeKeeper(keep[1]!)
-    if (payload) return renderKeeper(root, payload)
-    root.innerHTML = html`${header()}<main class="page center-page"><h2>That Goalkeeper link looks broken</h2>
-      <p class="muted">Ask your friend to share it again.</p><a class="btn btn-secondary" href="#/">Open Holdfast</a></main>`.html
-    return
+    if (payload) renderKeeper(root, payload)
+    else
+      root.innerHTML = html`${header()}<main class="page center-page"><h2>That Goalkeeper link looks broken</h2>
+        <p class="muted">Ask your friend to share it again.</p><a class="btn btn-secondary" href="#/">Open Holdfast</a></main>`.html
+    return null
   }
-  if (ctx.wallet) return renderHome(root)
-  if (conn === 'connecting') return renderConnecting(root)
-  if (conn === 'failed') return renderConnectFailed(root, connError, () => void connect())
-  renderLanding(root)
+  // The leaderboard is public: it works with or without a wallet.
+  if (hash.startsWith('/board') && ctx.apiAvailable !== false) return renderBoard(root), 'board'
+  if (ctx.wallet) {
+    if (hash.startsWith('/me') && ctx.apiAvailable !== false) return renderProfile(root), 'me'
+    return renderHome(root), 'goal'
+  }
+  if (conn === 'connecting') renderConnecting(root)
+  else if (conn === 'failed') renderConnectFailed(root, connError, () => void connect())
+  else renderLanding(root)
+  return null
 }
 
 type Field = HTMLInputElement | HTMLSelectElement
@@ -88,7 +108,10 @@ onChange((force) => {
     else rerenderPreservingForms()
   })
 })
-window.addEventListener('hashchange', route)
+window.addEventListener('hashchange', () => {
+  route()
+  window.scrollTo(0, 0)
+})
 document.addEventListener('focusout', () => {
   if (!deferred) return
   setTimeout(() => {
@@ -121,6 +144,7 @@ async function connect(): Promise<void> {
     // If the answer arrives after the timeout it still connects, unless a wallet is already attached.
     if (ctx.wallet) return
     await attachWallet(wallet)
+    void startAccount()
   } catch (err) {
     fail(
       isUserRejection(err)
@@ -132,15 +156,26 @@ async function connect(): Promise<void> {
   }
 }
 
+/** Once the wallet is connected: restore the profile, or offer to create one (once per wallet). */
+async function startAccount(): Promise<void> {
+  await Promise.all([loadProfile(), loadInvite()])
+  const address = ctx.address
+  if (!address || ctx.profileStatus !== 'signed_out' || wasWelcomed(address)) return
+  if (location.hash.startsWith('#/keep/') || document.querySelector('.sheet-backdrop')) return
+  openWelcomeSheet()
+}
+
 async function boot(): Promise<void> {
   route()
   void refreshPrices()
+  void loadInvite()
   // Friends opening a Goalkeeper link don't need to connect a wallet up front.
   if (location.hash.startsWith('#/keep/')) {
     if (conn === 'connecting') conn = 'outside'
     return
   }
   if (conn === 'connecting') return connect()
+  void checkApi()
   // Outside Nimiq Pay the landing page shows at once. If the wallet turns up late, connect then.
   const late = await connectNimiqPay(10_000)
   if (late && !ctx.wallet) void connect()
