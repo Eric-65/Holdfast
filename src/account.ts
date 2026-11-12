@@ -27,18 +27,38 @@ export async function checkApi(): Promise<boolean> {
   return ctx.apiAvailable
 }
 
-/** Look up who sent the invite this visitor arrived with (works without a wallet). */
-export async function loadInvite(): Promise<void> {
-  const code = pendingInviteCode()
-  if (!code) return
-  try {
-    ctx.invite = await api.invite(code)
-    emit()
-  } catch (err) {
-    // An unknown code is dropped; if the service is just unreachable, keep it for later.
-    if (err instanceof ApiFailure && err.code === 'unknown_code') clearInviteCode()
-  }
+/** How long the "X invited you" message stays on screen after arriving through an invite link. */
+const INVITE_BANNER_MS = 6000
+
+let inviteLookup: Promise<void> | null = null
+/**
+ * Look up who sent the invite this visitor arrived with (works without a wallet).
+ * `justArrived` is true only for the visit that came in through the link: that visit shows
+ * the inviter's name for a few seconds. The code itself is kept quietly until a profile exists.
+ */
+export function loadInvite(justArrived = false): Promise<void> {
+  inviteLookup ??= (async () => {
+    const code = pendingInviteCode()
+    if (!code) return
+    try {
+      ctx.invite = await api.invite(code)
+      if (justArrived) {
+        ctx.inviteBannerUntil = Date.now() + INVITE_BANNER_MS
+        window.setTimeout(() => {
+          ctx.inviteBannerUntil = 0
+          emit()
+        }, INVITE_BANNER_MS)
+      }
+      emit()
+    } catch (err) {
+      // An unknown code is dropped; if the service is just unreachable, keep it for later.
+      if (err instanceof ApiFailure && err.code === 'unknown_code') clearInviteCode()
+    }
+  })()
+  return inviteLookup
 }
+
+let profileLoadedAt = 0
 
 /** After the wallet connects: restore this device's session, or find out that sign-in is needed. */
 export async function loadProfile(): Promise<void> {
@@ -47,6 +67,7 @@ export async function loadProfile(): Promise<void> {
   try {
     if (token) {
       const { profile } = await api.me(token)
+      profileLoadedAt = Date.now()
       return setProfile(profile, 'ready')
     }
     // No session yet. A cheap public call tells us whether profiles exist on this deployment.
@@ -59,6 +80,41 @@ export async function loadProfile(): Promise<void> {
     // Keep a profile we already have on a temporary network error.
     if (!ctx.profile) setProfile(null, 'unavailable')
   }
+}
+
+/** Fetch fresh referral counts and rank, at most every few seconds. Used when a screen is opened. */
+export async function refreshProfile(maxAgeMs = 5000): Promise<void> {
+  if (ctx.profileStatus !== 'ready' || Date.now() - profileLoadedAt < maxAgeMs) return
+  profileLoadedAt = Date.now()
+  await loadProfile()
+}
+
+/**
+ * A signed-in profile with no inviter that opens an invite link (or still holds a code from one)
+ * gets that inviter recorded. Returns the inviter's name when it was recorded.
+ */
+export async function claimPendingInvite(): Promise<string | null> {
+  const code = pendingInviteCode()
+  if (!code || ctx.profileStatus !== 'ready' || !ctx.profile) return null
+  // The code has done its job either way; never keep nagging about it.
+  clearInviteCode()
+  ctx.invite = null
+  if (!ctx.profile.canClaimInvite || code === ctx.profile.code) return null
+  try {
+    return await claimInvite(code)
+  } catch {
+    return null
+  }
+}
+
+/** Record who invited this profile. Throws ApiFailure with a readable message if it cannot. */
+export async function claimInvite(code: string): Promise<string> {
+  const token = ctx.address ? sessionToken(ctx.address) : null
+  if (!token) throw new ApiFailure(401, 'signed_out', 'Please sign in with your wallet again.')
+  const { profile, inviter } = await api.claim(token, code)
+  profileLoadedAt = Date.now()
+  setProfile(profile, 'ready')
+  return inviter
 }
 
 export interface SignInResult {
@@ -82,6 +138,7 @@ export async function signIn(): Promise<SignInResult> {
   setSessionToken(address, result.token)
   clearInviteCode()
   ctx.invite = null
+  profileLoadedAt = Date.now()
   setProfile(result.profile, 'ready')
   return result
 }

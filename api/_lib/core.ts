@@ -18,6 +18,11 @@ export interface RequestContext {
   country: string | null
   /** Hash of the caller's IP. Used only for short-lived rate-limit counters, never stored on a profile. */
   ipKey: string
+  /**
+   * Hash of the caller's network (IPv4 address or IPv6 /64). Kept for 30 minutes next to an
+   * opened invite link, so the invite survives the jump from a browser into Nimiq Pay.
+   */
+  netKey: string
   /** When true, a new wallet on an already-seen device or browser does not count as a referral. */
   requireUniqueDevice: boolean
 }
@@ -34,6 +39,8 @@ export interface OwnProfile extends PublicProfile {
   fullAddress: string
   rank: number | null
   referredBy: string | null
+  /** True while this profile may still name its inviter (none recorded, and it joined recently). */
+  canClaimInvite: boolean
   referralList: { name: string; address: string; joinedAt: number }[]
 }
 
@@ -43,6 +50,11 @@ const NAME_MIN = 2
 const NAME_MAX = 24
 const LEADERBOARD_SIZE = 50
 const REFERRAL_LIST_SIZE = 100
+/** How long an opened invite link is remembered for the same network. */
+const CLICK_TTL_S = 30 * 60
+/** A profile created without an inviter can still name one for this long. */
+const CLAIM_WINDOW_MS = 7 * 24 * 3600 * 1000
+const AMBIGUOUS = '*'
 
 const userKey = (address: string) => `u:${address.replace(/\s/g, '')}`
 export const shortAddress = (address: string) => `${address.slice(0, 9)}…${address.slice(-4)}`
@@ -160,24 +172,29 @@ export async function login(ctx: RequestContext, body: LoginBody): Promise<Login
       walletsOnBrowserAtSignup: walletsOnBrowser,
     }
 
-    const refCode = cleanCode(body.ref)
-    const referrer = refCode ? await ctx.store.cmd<string | null>('GET', `code:${refCode}`) : null
+    // Who invited this wallet? First the code the app sent (from the link or typed in). If the
+    // code was lost on the way into Nimiq Pay, fall back to an invite link opened from the same
+    // network in the last 30 minutes, but only when exactly one inviter's link was opened there.
+    let refCode = cleanCode(body.ref)
+    let source = 'code'
+    let referrer = refCode ? await ctx.store.cmd<string | null>('GET', `code:${refCode}`) : null
     if (refCode) fields.refCodeUsed = refCode
-    if (referrer && referrer !== address) {
-      const duplicate = walletsOnDevice > 1 || walletsOnBrowser > 1
-      fields.referredBy = referrer
-      if (duplicate && ctx.requireUniqueDevice) {
-        fields.referralStatus = 'not_counted_duplicate_device'
-      } else {
-        fields.referralStatus = duplicate ? 'counted_shared_device' : 'counted'
-        referralCounted = true
+    if (!referrer) {
+      const clicked = await ctx.store.cmd<string | null>('GET', `click:${ctx.netKey}`)
+      if (clicked && clicked !== AMBIGUOUS) {
+        refCode = clicked
+        source = 'network_match'
+        referrer = await ctx.store.cmd<string | null>('GET', `code:${clicked}`)
       }
     }
+    const credit = referrer && referrer !== address ? referralFields(ctx, referrer, source, walletsOnDevice, walletsOnBrowser) : null
+    if (credit) Object.assign(fields, credit.fields)
+    referralCounted = !!credit?.counted
     await ctx.store.pipeline([
       ['HSET', key, ...Object.entries(fields).flat()],
       ['ZADD', 'lb', 'NX', 0, address],
       ['INCR', 'stats:users'],
-      ...(referralCounted ? ([['ZADD', `refs:${referrer}`, ctx.now, address], ['ZINCRBY', 'lb', 1, referrer!]] as Command[]) : []),
+      ...(referralCounted ? creditCommands(ctx, referrer!, address) : []),
     ])
   }
 
@@ -188,6 +205,60 @@ export async function login(ctx: RequestContext, body: LoginBody): Promise<Login
     ['SET', `sess:${sha256Hex(token)}`, address, 'EX', SESSION_TTL_S],
   ])
   return { token, isNew, referralCounted, profile: await ownProfile(ctx, address) }
+}
+
+/** What to record on the invited profile, and whether the referral counts. */
+function referralFields(ctx: RequestContext, referrer: string, source: string, walletsOnDevice: number, walletsOnBrowser: number) {
+  const duplicate = walletsOnDevice > 1 || walletsOnBrowser > 1
+  const counted = !(duplicate && ctx.requireUniqueDevice)
+  return {
+    counted,
+    fields: {
+      referredBy: referrer,
+      referralSource: source,
+      referredAt: ctx.now,
+      referralStatus: counted ? (duplicate ? 'counted_shared_device' : 'counted') : 'not_counted_duplicate_device',
+    } as Record<string, string | number>,
+  }
+}
+
+/** Add the invited wallet to the inviter's list and raise the inviter's leaderboard score by one. */
+const creditCommands = (ctx: RequestContext, referrer: string, invited: string): Command[] => [
+  ['ZADD', `refs:${referrer}`, ctx.now, invited],
+  ['ZINCRBY', 'lb', 1, referrer],
+]
+
+/**
+ * A profile that joined without an inviter (for example because the invite code was lost on the
+ * way into Nimiq Pay) can name one, once, within a week of joining. The wallet still counts for
+ * one inviter only, and two profiles cannot invite each other.
+ */
+export async function claimInvite(ctx: RequestContext, address: string, body: { code?: unknown }): Promise<{ profile: OwnProfile; inviter: string }> {
+  await rateLimit(ctx, `claim:${address.replace(/\s/g, '')}`, 10, 3600)
+  const key = userKey(address)
+  const [createdAt, referredBy, onDevice, onBrowser] = await ctx.store.cmd<(string | null)[]>(
+    'HMGET', key, 'createdAt', 'referredBy', 'walletsOnDeviceAtSignup', 'walletsOnBrowserAtSignup',
+  )
+  if (!createdAt) throw new ApiError(401, 'signed_out', 'Please sign in with your wallet again.')
+  if (referredBy) throw new ApiError(409, 'already_invited', 'Your profile already has an inviter.')
+  if (ctx.now - Number(createdAt) > CLAIM_WINDOW_MS)
+    throw new ApiError(403, 'claim_closed', 'An inviter can only be added in the first week after joining.')
+  const code = cleanCode(body.code)
+  const referrer = code ? await ctx.store.cmd<string | null>('GET', `code:${code}`) : null
+  if (!code || !referrer) throw new ApiError(404, 'unknown_code', 'That invite code is not valid.')
+  if (referrer === address) throw new ApiError(400, 'self_invite', 'You cannot use your own invite code.')
+  const [inviterName, inviterReferredBy] = await ctx.store.cmd<(string | null)[]>('HMGET', userKey(referrer), 'name', 'referredBy')
+  if (inviterReferredBy === address) throw new ApiError(400, 'mutual_invite', 'You invited this person, so they cannot be your inviter.')
+
+  // Only the first claim wins if two arrive at once.
+  if ((await ctx.store.cmd<number>('HSETNX', key, 'referredBy', referrer)) !== 1)
+    throw new ApiError(409, 'already_invited', 'Your profile already has an inviter.')
+  const credit = referralFields(ctx, referrer, 'claimed_later', Number(onDevice ?? 0), Number(onBrowser ?? 0))
+  await ctx.store.pipeline([
+    ['HSET', key, ...Object.entries({ ...credit.fields, refCodeUsed: code }).flat()],
+    ...(credit.counted ? creditCommands(ctx, referrer, address) : []),
+  ])
+  return { profile: await ownProfile(ctx, address), inviter: inviterName ?? defaultName(referrer) }
 }
 
 export async function authenticate(ctx: RequestContext, authorization: string | undefined): Promise<string> {
@@ -233,6 +304,7 @@ export async function ownProfile(ctx: RequestContext, address: string): Promise<
     joinedAt: Number(user.createdAt ?? 0),
     rank: rank === null || rank === undefined ? null : Number(rank) + 1,
     referredBy: user.referredBy ? String(lookups[referred.length] ?? defaultName(user.referredBy)) : null,
+    canClaimInvite: !user.referredBy && ctx.now - Number(user.createdAt ?? 0) <= CLAIM_WINDOW_MS,
     referralList: referred.map((r, i) => ({
       name: String(lookups[i] ?? defaultName(r.address)),
       address: shortAddress(r.address),
@@ -276,9 +348,15 @@ export async function leaderboard(ctx: RequestContext): Promise<{ total: number;
 
 /** Who an invite code belongs to, for the "X invited you" banner. */
 export async function inviteInfo(ctx: RequestContext, rawCode: unknown): Promise<{ code: string; name: string }> {
+  await rateLimit(ctx, `inv:${ctx.ipKey}`, 120, 300)
   const code = cleanCode(rawCode)
   const address = code ? await ctx.store.cmd<string | null>('GET', `code:${code}`) : null
   if (!code || !address) throw new ApiError(404, 'unknown_code', 'That invite link is not valid.')
+  // Remember that this network opened this invite. If links from two different inviters are
+  // opened from one network, the note becomes ambiguous and is not used.
+  const clickKey = `click:${ctx.netKey}`
+  const previous = await ctx.store.cmd<string | null>('GET', clickKey)
+  await ctx.store.cmd('SET', clickKey, previous && previous !== code ? AMBIGUOUS : code, 'EX', CLICK_TTL_S)
   const name = await ctx.store.cmd<string | null>('HGET', userKey(address), 'name')
   return { code, name: name ?? defaultName(address) }
 }

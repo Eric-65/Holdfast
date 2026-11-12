@@ -318,3 +318,9 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 @media (max-width: 335px) {
   .landing-wrap .brand span { display: none; }
 }
+
+.invite-field input { text-transform: none; }
+/* Fades out just before it is removed; the delay is set inline from the time remaining. */
+.invite-banner { animation: invite-out 0.5s ease both; }
+@keyframes invite-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .invite-banner { animation: none; } }

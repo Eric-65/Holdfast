@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { decodeKeeper, encodeKeeper, keeperUrl, nimiqPaymentUri, type KeeperPayload } from '../src/lib/share'
 import { inviteUrl, miniAppTarget, miniAppUrl, nimiqPayDeepLink } from '../src/lib/deeplink'
+import { parseInviteInput } from '../src/lib/identity'
 import { cheerData } from '../src/views/keeper'
 import { parseValidators, normalizeStaker } from '../src/lib/chain'
 import { parsePriceResponse } from '../src/lib/prices'
@@ -54,6 +55,19 @@ describe('open in Nimiq Pay links', () => {
     expect(nimiqPayDeepLink('holdfast.app')).toBe('nimiqpay://miniapp?url=holdfast.app')
     expect(nimiqPayDeepLink('https://me.github.io/Holdfast/')).toBe('nimiqpay://miniapp?url=https://me.github.io/Holdfast/')
     expect(nimiqPayDeepLink('https://a.b/x?y=1&z=2#h')).toBe('nimiqpay://miniapp?url=https://a.b/x%3Fy%3D1%26z%3D2%23h')
+  })
+})
+
+describe('typed invite codes', () => {
+  it('accepts a bare code or a whole invite link', () => {
+    expect(parseInviteInput(' ccrsx36 ')).toBe('CCRSX36')
+    expect(parseInviteInput('https://holdfast-puce.vercel.app/i/CCRSX36')).toBe('CCRSX36')
+    expect(parseInviteInput('holdfast-puce.vercel.app/i/ccrsx36/')).toBe('CCRSX36')
+    expect(parseInviteInput('https://holdfast-puce.vercel.app/?ref=CCRSX36#/')).toBe('CCRSX36')
+    expect(parseInviteInput('Join me: https://holdfast-puce.vercel.app/i/CCRSX36 see you')).toBe('CCRSX36')
+  })
+  it('rejects things that are not codes', () => {
+    for (const bad of ['', 'abc', 'hello world', 'https://example.com/', 'x'.repeat(13)]) expect(parseInviteInput(bad)).toBeNull()
   })
 })
 

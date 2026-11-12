@@ -100,7 +100,12 @@ export function renderLanding(root: HTMLElement): void {
   root.innerHTML = html`<div class="landing-wrap">
   ${header(openButton('open-nimiq-pay', 'btn-compact', 'Open in Nimiq Pay'))}
   <main class="page landing">
-    ${ctx.invite ? html`<p class="invite-banner">🎉 <b>${ctx.invite.name}</b> invited you to Holdfast</p>` : ''}
+    ${
+      // Shown for a few seconds on the visit that arrived through the link, then it clears.
+      ctx.invite && Date.now() < ctx.inviteBannerUntil
+        ? html`<p class="invite-banner" role="status" style="${raw(`animation-delay:${Math.max(0, ctx.inviteBannerUntil - Date.now() - 500)}ms`)}">🎉 <b>${ctx.invite.name}</b> invited you to Holdfast</p>`
+        : ''
+    }
 
     <section class="l-hero">
       <h1>Save it. Stake it. <span class="gold">Hold fast.</span></h1>

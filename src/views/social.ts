@@ -1,9 +1,9 @@
 import { ctx, emit } from '../app'
-import { rename, signIn, signOut } from '../account'
+import { claimInvite, rename, signIn, signOut } from '../account'
 import { api, ApiFailure, type LeaderboardRow } from '../lib/api'
 import { inviteUrl, nimiqPayDeepLink, miniAppTarget } from '../lib/deeplink'
 import { timeAgo } from '../lib/format'
-import { markWelcomed } from '../lib/identity'
+import { clearInviteCode, markWelcomed, parseInviteInput, pendingInviteCode, setInviteCode } from '../lib/identity'
 import { errorMessage, isUserRejection } from '../lib/wallet'
 import { $, busy, copyText, html, openSheet, raw, toast, type Raw } from '../ui'
 import { header } from './common'
@@ -25,6 +25,7 @@ const storedList = raw(`<ul class="stored-list">
   <li><b>Your wallet signature.</b> Proof that the address is yours.</li>
   <li><b>An anonymous device ID</b> from Nimiq Pay, if you allow it, and an <b>anonymous browser ID</b>. They tell one person from many wallets.</li>
   <li><b>When you joined and were last seen, and your country.</b> Your IP address is not stored.</li>
+  <li><b>Who invited you</b>, if anyone. When an invite link is opened, a scrambled note of the network is kept for 30 minutes so the invite still counts after moving into Nimiq Pay.</li>
 </ul>`)
 
 function failureText(err: unknown): string {
@@ -32,13 +33,33 @@ function failureText(err: unknown): string {
   return `Something went wrong: ${errorMessage(err)}`
 }
 
+/**
+ * Optional invite code at sign-up. It is filled in when the visitor arrived through an invite
+ * link; a friend's code or whole link can also be typed or pasted, in case the link's code did
+ * not make it into Nimiq Pay.
+ */
+const inviteField = (): Raw => html`<label class="invite-field">Invite code <span class="muted small">(optional)</span>
+  <input name="invite" value="${pendingInviteCode() ?? ''}" placeholder="Code or link from the friend who invited you"
+    autocomplete="off" autocapitalize="characters" spellcheck="false"/></label>`
+
 /** Shared sign-in action for the welcome sheet and the profile page. */
-async function doSignIn(btn: HTMLButtonElement | null): Promise<boolean> {
+async function doSignIn(btn: HTMLButtonElement | null, inviteInput: HTMLInputElement | null): Promise<boolean> {
+  const typed = inviteInput?.value.trim() ?? ''
+  if (inviteInput) {
+    const code = typed ? parseInviteInput(typed) : null
+    if (typed && !code) {
+      toast('That invite code does not look right. Check it, or leave the field empty.', 'error')
+      return false
+    }
+    if (code) setInviteCode(code)
+    else clearInviteCode()
+  }
   return busy(btn, 'Confirm in Nimiq Pay…', async () => {
     try {
       const r = await signIn()
       invalidateBoard()
-      toast(r.isNew ? (r.referralCounted ? 'Profile created. Your invite was counted 🎉' : 'Profile created 🎉') : 'Welcome back 👋', 'success')
+      const invited = r.profile.referredBy ? `${r.profile.referredBy} invited you 🎉` : 'Welcome 🎉'
+      toast(r.isNew ? `Profile created. ${invited}` : 'Welcome back 👋', 'success')
       return true
     } catch (err) {
       toast(isUserRejection(err) ? 'Cancelled. You can create your profile any time.' : failureText(err), isUserRejection(err) ? 'info' : 'error')
@@ -55,6 +76,7 @@ export function openWelcomeSheet(): void {
     html`<h2>${ctx.invite ? html`🎉 ${ctx.invite.name} invited you` : 'Create your Holdfast profile'}</h2>
       <p>Your wallet is your account. Sign one message to prove it's yours and get your own invite link.
         <b>It's free and moves no NIM.</b></p>
+      ${inviteField()}
       <details class="stored"><summary>What Holdfast stores</summary>${storedList}</details>
       <button class="btn btn-primary" id="welcome-sign">Sign &amp; create profile</button>
       <button class="btn btn-link" id="welcome-later">Not now</button>`,
@@ -62,7 +84,7 @@ export function openWelcomeSheet(): void {
       $('#welcome-later', sheet)!.addEventListener('click', close)
       const btn = $<HTMLButtonElement>('#welcome-sign', sheet)!
       btn.addEventListener('click', async () => {
-        if (await doSignIn(btn)) close()
+        if (await doSignIn(btn, $<HTMLInputElement>('input[name=invite]', sheet))) close()
       })
     },
   )
@@ -85,17 +107,21 @@ export function renderProfile(root: HTMLElement): void {
     root.innerHTML = html`${header()}
     <main class="page">
       <section class="hero small">
-        <h1>${ctx.invite ? html`🎉 ${ctx.invite.name} invited you` : 'Your profile'}</h1>
+        <h1>Your profile</h1>
         <p class="lead">Your wallet is your account. Sign one message to prove it's yours.</p>
       </section>
-      <section class="card form">
+      <form class="card form" id="signin-form" novalidate>
         <p>You get a display name, your own invite link and a place on the leaderboard. <b>Signing is free and moves no NIM.</b></p>
+        ${inviteField()}
         <details class="stored"><summary>What Holdfast stores</summary>${storedList}</details>
-        <button class="btn btn-primary" id="sign-in">Sign &amp; create profile</button>
-      </section>
+        <button class="btn btn-primary" id="sign-in" type="submit">Sign &amp; create profile</button>
+      </form>
     </main>`.html
-    const btn = $<HTMLButtonElement>('#sign-in', root)!
-    btn.addEventListener('click', () => void doSignIn(btn))
+    const form = $<HTMLFormElement>('#signin-form', root)!
+    form.addEventListener('submit', (e) => {
+      e.preventDefault()
+      void doSignIn($<HTMLButtonElement>('#sign-in', form), $<HTMLInputElement>('input[name=invite]', form))
+    })
     return
   }
 
@@ -140,6 +166,19 @@ export function renderProfile(root: HTMLElement): void {
       ${p.referredBy ? html`<p class="muted small">You were invited by <b>${p.referredBy}</b>.</p>` : ''}
     </section>
 
+    ${
+      p.canClaimInvite
+        ? html`<section class="card">
+            <h3>Who invited you?</h3>
+            <p class="muted">Enter their invite code, or paste their invite link, so they get the credit. You can do this once, in your first week.</p>
+            <form id="claim-form" class="form" novalidate>
+              <input name="code" placeholder="Invite code or link" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Invite code or link"/>
+              <button class="btn btn-secondary" type="submit">Add my inviter</button>
+            </form>
+          </section>`
+        : ''
+    }
+
     <section class="card">
       <details class="stored"><summary>What Holdfast stores about you</summary>${storedList}
         <p class="muted small">It is used only to keep profiles and invite counts honest.</p></details>
@@ -162,6 +201,22 @@ export function renderProfile(root: HTMLElement): void {
     toast('Signed out on this device', 'info')
   })
   $('#edit-name', root)!.addEventListener('click', () => editName(p.name))
+  const claimForm = $<HTMLFormElement>('#claim-form', root)
+  claimForm?.addEventListener('submit', (e) => {
+    e.preventDefault()
+    const input = claimForm.elements.namedItem('code') as HTMLInputElement
+    const code = parseInviteInput(input.value)
+    if (!code) return toast('Enter the invite code or link your friend sent you', 'error')
+    void busy($<HTMLButtonElement>('button[type=submit]', claimForm), 'Saving…', async () => {
+      try {
+        const inviter = await claimInvite(code)
+        invalidateBoard()
+        toast(`🎉 ${inviter} is now your inviter`, 'success')
+      } catch (err) {
+        toast(failureText(err), 'error')
+      }
+    })
+  })
 }
 
 function editName(current: string): void {

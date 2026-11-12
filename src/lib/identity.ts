@@ -70,6 +70,15 @@ export function captureInviteCode(loc: Location = location): string | null {
   return code
 }
 
+/** Read an invite code from what someone typed or pasted: a bare code or a whole invite link. */
+export function parseInviteInput(text: string): string | null {
+  const t = text.trim()
+  // Works on a link inside a longer pasted message too ("Join me: https://... see you").
+  const fromLink = /\/i\/([A-Za-z0-9]{5,12})(?![A-Za-z0-9])/.exec(t)?.[1] ?? /[?&]ref=([A-Za-z0-9]{5,12})(?![A-Za-z0-9])/.exec(t)?.[1]
+  return cleanInviteCode(fromLink ?? t)
+}
+
+export const setInviteCode = (code: string): void => lsSet(REF_KEY, code)
 export const pendingInviteCode = (): string | null => cleanInviteCode(lsGet(REF_KEY))
 export const clearInviteCode = (): void => lsSet(REF_KEY, null)
 

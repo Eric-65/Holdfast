@@ -15,6 +15,8 @@ export interface OwnProfile extends PublicProfile {
   fullAddress: string
   rank: number | null
   referredBy: string | null
+  /** True while this profile may still name its inviter. */
+  canClaimInvite: boolean
   referralList: { name: string; address: string; joinedAt: number }[]
 }
 
@@ -60,4 +62,5 @@ export const api = {
     call<{ token: string; isNew: boolean; referralCounted: boolean; profile: OwnProfile }>('login', { body }),
   me: (token: string) => call<{ profile: OwnProfile }>('me', { token }),
   setName: (token: string, name: string) => call<{ profile: OwnProfile }>('name', { token, body: { name } }),
+  claim: (token: string, code: string) => call<{ profile: OwnProfile; inviter: string }>('claim', { token, body: { code } }),
 }

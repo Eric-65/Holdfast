@@ -1,11 +1,11 @@
 import './style.css'
-import { checkApi, loadInvite, loadProfile } from './account'
+import { checkApi, claimPendingInvite, loadInvite, loadProfile, refreshProfile } from './account'
 import { attachWallet, ctx, onChange, refreshChain, refreshPrices } from './app'
 import { captureInviteCode, wasWelcomed } from './lib/identity'
 import { decodeKeeper } from './lib/share'
 import { initTheme, syncToggle, toggleTheme } from './lib/theme'
 import { connectNimiqPay, errorMessage, insideNimiqPay, isUserRejection } from './lib/wallet'
-import { html } from './ui'
+import { html, toast } from './ui'
 import { header } from './views/common'
 import { renderKeeper } from './views/keeper'
 import { renderConnectFailed, renderConnecting, renderHome, renderLanding } from './views/saver'
@@ -14,7 +14,7 @@ import { openWelcomeSheet, renderBoard, renderProfile, tabBar } from './views/so
 const root = document.getElementById('app')!
 initTheme()
 // An invite link lands as ?ref=CODE. Remember the code now; it is used when the profile is created.
-captureInviteCode()
+const arrivedByInvite = captureInviteCode() !== null
 
 /** outside: normal browser. connecting: waiting on Nimiq Pay. failed: it declined or didn't answer. */
 let conn: 'outside' | 'connecting' | 'failed' = insideNimiqPay() ? 'connecting' : 'outside'
@@ -114,6 +114,8 @@ onChange((force) => {
 window.addEventListener('hashchange', () => {
   route()
   window.scrollTo(0, 0)
+  // Opening the profile or the leaderboard shows current referral counts and rank.
+  if (/^#\/(me|board)/.test(location.hash)) void refreshProfile()
 })
 document.addEventListener('focusout', () => {
   if (!deferred) return
@@ -161,7 +163,10 @@ async function connect(): Promise<void> {
 
 /** Once the wallet is connected: restore the profile, or offer to create one (once per wallet). */
 async function startAccount(): Promise<void> {
-  await Promise.all([loadProfile(), loadInvite()])
+  await Promise.all([loadProfile(), loadInvite(arrivedByInvite)])
+  // Already has a profile but no inviter yet: an invite link opened now still counts.
+  const inviter = await claimPendingInvite()
+  if (inviter) toast(`🎉 ${inviter} is now your inviter`, 'success')
   const address = ctx.address
   if (!address || ctx.profileStatus !== 'signed_out' || wasWelcomed(address)) return
   if (location.hash.startsWith('#/keep/') || document.querySelector('.sheet-backdrop')) return
@@ -171,7 +176,7 @@ async function startAccount(): Promise<void> {
 async function boot(): Promise<void> {
   route()
   void refreshPrices()
-  void loadInvite()
+  void loadInvite(arrivedByInvite)
   // Friends opening a Goalkeeper link don't need to connect a wallet up front.
   if (location.hash.startsWith('#/keep/')) {
     if (conn === 'connecting') conn = 'outside'
@@ -188,6 +193,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && ctx.wallet) {
     void refreshChain()
     void refreshPrices()
+    void refreshProfile(15_000)
   }
 })
 

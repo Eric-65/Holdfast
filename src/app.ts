@@ -29,6 +29,8 @@ export interface AppCtx {
   profileStatus: ProfileStatus
   /** The invite this visitor arrived with, once its code has been checked. */
   invite: { code: string; name: string } | null
+  /** The "X invited you" message shows until this time (ms), then clears. 0 = not showing. */
+  inviteBannerUntil: number
 }
 
 export const ctx: AppCtx = {
@@ -45,6 +47,7 @@ export const ctx: AppCtx = {
   profile: null,
   profileStatus: 'unknown',
   invite: null,
+  inviteBannerUntil: 0,
   fiats: (() => {
     const base = ['usdt', 'ngn']
     const h = hostFiat()

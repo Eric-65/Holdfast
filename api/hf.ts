@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { ApiError, authenticate, createChallenge, inviteInfo, leaderboard, login, ownProfile, setName, type RequestContext } from './_lib/core.js'
+import { ApiError, authenticate, claimInvite, createChallenge, inviteInfo, leaderboard, login, ownProfile, setName, type RequestContext } from './_lib/core.js'
 import { storeFromEnv, type Store } from './_lib/store.js'
 
 /**
  * Holdfast API: one serverless function, routed by ?a=<action>.
  *   GET  leaderboard | invite&code=X | me (signed in)
- *   POST challenge | login | name (signed in)
+ *   POST challenge | login | name (signed in) | claim (signed in)
  */
 type Req = IncomingMessage & { body?: unknown }
 const MAX_BODY = 8 * 1024
@@ -41,6 +41,17 @@ const header = (req: Req, name: string): string | undefined => {
   return Array.isArray(v) ? v[0] : v
 }
 
+/** The part of an IP that stays the same for one connection: all of IPv4, the /64 of IPv6. */
+export function networkOf(ip: string): string {
+  const clean = ip.replace(/^\[|\]$/g, '').replace(/^::ffff:/i, '').toLowerCase()
+  if (!clean.includes(':')) return clean
+  const [head = '', tail = ''] = clean.split('::')
+  const groups = head.split(':').filter(Boolean)
+  const missing = 8 - groups.length - tail.split(':').filter(Boolean).length
+  const full = clean.includes('::') ? [...groups, ...Array(Math.max(0, missing)).fill('0'), ...tail.split(':').filter(Boolean)] : groups
+  return full.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')
+}
+
 export function createHandler(getStore: () => Store | null) {
   return async function handler(req: Req, res: ServerResponse): Promise<void> {
     const send = (status: number, body: unknown, cache = 'no-store') => {
@@ -61,6 +72,7 @@ export function createHandler(getStore: () => Store | null) {
         now: Date.now(),
         country: country && /^[A-Z]{2}$/.test(country) ? country : null,
         ipKey: createHash('sha256').update(ip).digest('hex').slice(0, 24),
+        netKey: createHash('sha256').update(`net:${networkOf(ip)}`).digest('hex').slice(0, 24),
         requireUniqueDevice: process.env.HF_REQUIRE_UNIQUE_DEVICE === '1',
       }
 
@@ -73,6 +85,7 @@ export function createHandler(getStore: () => Store | null) {
         if (action === 'challenge') return send(200, await createChallenge(ctx, body))
         if (action === 'login') return send(200, await login(ctx, body))
         if (action === 'name') return send(200, { profile: await setName(ctx, await authenticate(ctx, header(req, 'authorization')), body) })
+        if (action === 'claim') return send(200, await claimInvite(ctx, await authenticate(ctx, header(req, 'authorization')), body))
       }
       throw new ApiError(404, 'not_found', 'Unknown request.')
     } catch (err) {

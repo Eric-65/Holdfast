@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { ApiError, authenticate, cleanName, createChallenge, inviteInfo, leaderboard, login, ownProfile, setName, type RequestContext } from '../api/_lib/core'
+import { ApiError, authenticate, claimInvite, cleanName, createChallenge, inviteInfo, leaderboard, login, ownProfile, setName, type RequestContext } from '../api/_lib/core'
+import { networkOf } from '../api/hf'
 import { addressFromPublicKey, decodeBytes, normalizeAddress, signedMessageDigest, verifySignedMessage } from '../api/_lib/crypto'
 import { MemoryStore } from '../api/_lib/store'
 
@@ -25,6 +26,7 @@ const ctx = (over: Partial<RequestContext> = {}): RequestContext => ({
   now,
   country: 'NG',
   ipKey: 'ip-' + Math.random().toString(36).slice(2),
+  netKey: 'net-' + Math.random().toString(36).slice(2),
   requireUniqueDevice: false,
   ...over,
 })
@@ -229,6 +231,89 @@ describe('referrals and leaderboard', () => {
     expect(await inviteInfo(ctx(), a.profile.code.toLowerCase())).toEqual({ code: a.profile.code, name: a.profile.name })
     await expect(inviteInfo(ctx(), 'ZZZZZZZ')).rejects.toMatchObject({ status: 404 })
     await expect(inviteInfo(ctx(), '<script>')).rejects.toMatchObject({ status: 404 })
+  })
+})
+
+describe('invites that lose their code on the way into Nimiq Pay', () => {
+  it('lets a recent profile name its inviter afterwards, once', async () => {
+    const alice = makeWallet()
+    const a = await join(alice)
+    const bob = makeWallet()
+    const b = await join(bob) // joined with no code
+    expect(b.profile.canClaimInvite).toBe(true)
+    now += 3600_000
+    const claimed = await claimInvite(ctx(), bob.address, { code: a.profile.code.toLowerCase() })
+    expect(claimed.inviter).toBe(a.profile.name)
+    expect(claimed.profile.referredBy).toBe(a.profile.name)
+    expect(claimed.profile.canClaimInvite).toBe(false)
+
+    const me = await ownProfile(ctx(), alice.address)
+    expect(me.referrals).toBe(1)
+    expect(me.rank).toBe(1)
+    expect(me.referralList[0]!.address).toBe(b.profile.address)
+    expect(await store.cmd('HGET', `u:${bob.address.replace(/\s/g, '')}`, 'referralSource')).toBe('claimed_later')
+
+    // A wallet counts for one inviter only.
+    const carol = await join(makeWallet())
+    await expect(claimInvite(ctx(), bob.address, { code: carol.profile.code })).rejects.toMatchObject({ code: 'already_invited' })
+    expect((await ownProfile(ctx(), alice.address)).referrals).toBe(1)
+  })
+
+  it('refuses own codes, unknown codes, mutual invites and late claims', async () => {
+    const alice = makeWallet()
+    const a = await join(alice)
+    const bob = makeWallet()
+    const b = await join(bob, { ref: a.profile.code })
+    await expect(claimInvite(ctx(), alice.address, { code: a.profile.code })).rejects.toMatchObject({ code: 'self_invite' })
+    await expect(claimInvite(ctx(), alice.address, { code: 'NOSUCH99' })).rejects.toMatchObject({ code: 'unknown_code' })
+    // Alice invited Bob, so Bob cannot also be Alice's inviter.
+    await expect(claimInvite(ctx(), alice.address, { code: b.profile.code })).rejects.toMatchObject({ code: 'mutual_invite' })
+
+    const dan = makeWallet()
+    await join(dan)
+    now += 8 * 24 * 3600_000
+    expect((await ownProfile(ctx(), dan.address)).canClaimInvite).toBe(false)
+    await expect(claimInvite(ctx(), dan.address, { code: a.profile.code })).rejects.toMatchObject({ code: 'claim_closed' })
+    expect((await ownProfile(ctx(), alice.address)).referrals).toBe(1)
+  })
+
+  it('matches a new wallet to an invite link opened from the same network shortly before', async () => {
+    const alice = makeWallet()
+    const a = await join(alice)
+    const home = { netKey: 'home-wifi' }
+    // The friend opens the link in a browser; Nimiq Pay then loads Holdfast without the code.
+    await inviteInfo(ctx(home), a.profile.code)
+    now += 5 * 60_000
+    const bob = makeWallet()
+    const b = await join(bob, {}, home)
+    expect(b.referralCounted).toBe(true)
+    expect(b.profile.referredBy).toBe(a.profile.name)
+    expect(await store.cmd('HGET', `u:${bob.address.replace(/\s/g, '')}`, 'referralSource')).toBe('network_match')
+
+    // Someone on another network, or after the 30 minutes, is not matched.
+    expect((await join(makeWallet(), {}, { netKey: 'elsewhere' })).referralCounted).toBe(false)
+    now += 31 * 60_000
+    expect((await join(makeWallet(), {}, home)).referralCounted).toBe(false)
+    expect((await ownProfile(ctx(), alice.address)).referrals).toBe(1)
+  })
+
+  it('does not guess when two inviters share a network, and a real code always wins', async () => {
+    const a = await join(makeWallet())
+    const z = await join(makeWallet())
+    const cafe = { netKey: 'cafe-wifi' }
+    await inviteInfo(ctx(cafe), a.profile.code)
+    await inviteInfo(ctx(cafe), z.profile.code)
+    expect((await join(makeWallet(), {}, cafe)).referralCounted).toBe(false)
+    const withCode = await join(makeWallet(), { ref: z.profile.code }, cafe)
+    expect(withCode.profile.referredBy).toBe(z.profile.name)
+  })
+
+  it('groups IPv6 addresses by network and leaves IPv4 whole', () => {
+    expect(networkOf('102.89.23.7')).toBe('102.89.23.7')
+    expect(networkOf('::ffff:102.89.23.7')).toBe('102.89.23.7')
+    expect(networkOf('2a01:04f8:0c17:1b2c:aaaa:bbbb:cccc:dddd')).toBe('2a01:4f8:c17:1b2c')
+    expect(networkOf('2a01:4f8:c17:1b2c::1')).toBe(networkOf('2a01:4f8:c17:1b2c:9:9:9:9'))
+    expect(networkOf('2a01:4f8::1')).toBe('2a01:4f8:0:0')
   })
 })
 
