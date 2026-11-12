@@ -277,15 +277,19 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 
 .l-block { display: flex; flex-direction: column; gap: 14px; }
 .l-block .lead { margin: 0; }
-.phone { align-self: center; width: min(100%, 340px); border: 11px solid var(--ink); border-radius: 44px; background: var(--surface); }
-[data-theme='dark'] .phone { border-color: #3d4380; }
-.phone-screen { padding: 26px 22px 22px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.phone-screen .l-label { margin: 0; color: var(--ink-2); }
-.phone-title { font-size: 1.35rem; text-align: center; margin-bottom: 8px; }
-.steps-done { list-style: none; margin: 0 0 10px; padding: 0; align-self: stretch; display: flex; flex-direction: column; gap: 9px; }
-.steps-done li { display: flex; align-items: center; gap: 10px; font-weight: 600; }
-.tick { flex: 0 0 auto; width: 22px; height: 22px; fill: none; stroke: var(--good); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-.phone-result { align-self: stretch; padding: 13px 14px; border-radius: 14px; text-align: center; font-weight: 800; background: color-mix(in srgb, var(--good) 13%, transparent); color: var(--good); }
+
+.lock-panel { display: flex; flex-direction: column; align-items: center; gap: 4px; border-radius: 40px; padding: 26px 16px 22px; }
+.lock-panel .l-label { margin: 0; color: var(--ink-2); }
+.lock-title { font-size: 1.35rem; text-align: center; margin-bottom: 14px; }
+.chain { display: block; width: 100%; max-width: 380px; height: auto; margin-bottom: 14px; }
+.chain .link { fill: none; stroke-width: 7; }
+.chain .l0 { stroke: var(--gold); }
+.chain .l1 { stroke: var(--ink); }
+[data-theme='dark'] .chain .l1 { stroke: #7f87c9; }
+.chain .gap { fill: none; stroke: var(--surface); stroke-width: 10; }
+.chain .link-icon { font-size: 22px; text-anchor: middle; }
+.chain .link-text { font-size: 10.5px; font-weight: 700; text-anchor: middle; fill: var(--ink-2); }
+.lock-result { padding: 13px 30px; border-radius: 999px; text-align: center; font-weight: 800; background: color-mix(in srgb, var(--good) 13%, transparent); color: var(--good); }
 
 .diagram { display: block; width: 100%; height: auto; }
 .diagram .edge { fill: none; stroke: var(--muted); stroke-width: 2; }
@@ -305,7 +309,12 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 .faq summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 6px; }
 .faq p { margin: 0 0 18px; color: var(--ink-2); }
 .l-end { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
-@media (max-width: 360px) {
+/* Keep the Holdfast name next to the logo on narrow phones: shrink the button first. */
+@media (max-width: 380px) {
+  .btn-compact { font-size: 0.82rem; padding: 8px 11px; }
+  .landing-wrap > .topbar { padding-left: 12px; padding-right: 12px; }
+  .l-hero h1 { font-size: 2.05rem; }
+}
+@media (max-width: 335px) {
   .landing-wrap .brand span { display: none; }
-  .l-hero h1 { font-size: 2rem; }
 }

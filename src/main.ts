@@ -21,10 +21,13 @@ let conn: 'outside' | 'connecting' | 'failed' = insideNimiqPay() ? 'connecting' 
 let connError = ''
 const CONNECT_TIMEOUT_MS = 20_000
 
-// Views re-render often, so the theme switch uses one delegated listener.
+// Views re-render often, so the header controls use one delegated listener.
 document.addEventListener('click', (e) => {
-  const btn = (e.target as Element).closest?.('.theme-toggle')
-  if (btn) toggleTheme()
+  const target = e.target as Element
+  if (target.closest?.('.theme-toggle')) toggleTheme()
+  // The logo always leads back to the first page, at the top. When the visitor is already
+  // there the address does not change, so scroll up explicitly.
+  if (target.closest?.('.brand')) window.scrollTo({ top: 0, behavior: 'smooth' })
 })
 new MutationObserver(() => document.querySelectorAll<HTMLButtonElement>('.theme-toggle').forEach(syncToggle)).observe(root, {
   childList: true,

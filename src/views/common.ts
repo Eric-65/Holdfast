@@ -31,7 +31,7 @@ const themeToggle = raw(`<button type="button" class="theme-toggle" aria-label="
 
 export function header(right: Raw | string = ''): Raw {
   return html`<header class="topbar">
-    <a class="brand" href="#/">${logo}<span>Holdfast</span></a>
+    <a class="brand" href="#/" aria-label="Holdfast, back to the first page">${logo}<span>Holdfast</span></a>
     <div class="topbar-right">${right}${themeToggle}</div>
   </header>`
 }

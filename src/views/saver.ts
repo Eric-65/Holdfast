@@ -25,8 +25,27 @@ const EMOJIS = ['🎯', '🏠', '🎓', '✈️', '🚗', '💍', '📱', '🛡�
 
 // ---------- Landing (not connected) ----------
 
-/** Tick used in the landing page's mock screens. */
-const tick = raw(`<svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m7.5 12.5 3 3 6-6.5"/></svg>`)
+/** The four things that happen when you lock NIM, drawn as links of one chain. */
+const lockChain = raw(`<svg class="chain" viewBox="0 0 288 132" role="img" aria-label="Four linked steps: approve in Nimiq Pay, staked from your own wallet, earning staking rewards, visible to your Goalkeeper.">
+  <circle class="link l0" cx="45" cy="48" r="40"/>
+  <circle class="link l1" cx="111" cy="48" r="40"/>
+  <circle class="link l0" cx="177" cy="48" r="40"/>
+  <circle class="link l1" cx="243" cy="48" r="40"/>
+  <path class="gap" d="M74.1 20.5 A40 40 0 0 1 81.1 30.8"/><path class="link l0" d="M72.6 19.0 A40 40 0 0 1 82.0 32.7"/>
+  <path class="gap" d="M81.9 75.5 A40 40 0 0 1 74.9 65.2"/><path class="link l1" d="M83.4 77.0 A40 40 0 0 1 74.0 63.3"/>
+  <path class="gap" d="M140.1 20.5 A40 40 0 0 1 147.1 30.8"/><path class="link l1" d="M138.6 19.0 A40 40 0 0 1 148.0 32.7"/>
+  <path class="gap" d="M147.9 75.5 A40 40 0 0 1 140.9 65.2"/><path class="link l0" d="M149.4 77.0 A40 40 0 0 1 140.0 63.3"/>
+  <path class="gap" d="M206.1 20.5 A40 40 0 0 1 213.1 30.8"/><path class="link l0" d="M204.6 19.0 A40 40 0 0 1 214.0 32.7"/>
+  <path class="gap" d="M213.9 75.5 A40 40 0 0 1 206.9 65.2"/><path class="link l1" d="M215.4 77.0 A40 40 0 0 1 206.0 63.3"/>
+  <text class="link-icon" x="45" y="56">👍</text>
+  <text class="link-text" x="45" y="110">Approve in</text><text class="link-text" x="45" y="124">Nimiq Pay</text>
+  <text class="link-icon" x="111" y="56">🔒</text>
+  <text class="link-text" x="111" y="110">Staked from</text><text class="link-text" x="111" y="124">your wallet</text>
+  <text class="link-icon" x="177" y="56">🌱</text>
+  <text class="link-text" x="177" y="110">Earning</text><text class="link-text" x="177" y="124">rewards</text>
+  <text class="link-icon" x="243" y="56">🛡️</text>
+  <text class="link-text" x="243" y="110">Goalkeeper</text><text class="link-text" x="243" y="124">sees it</text>
+</svg>`)
 
 /** Who does what: you lock NIM into the goal, your Goalkeeper sees the progress and cheers you on. */
 const keeperDiagram = raw(`<svg class="diagram" viewBox="0 0 360 240" role="img" aria-label="You lock NIM into your goal. Your Goalkeeper sees the progress and sends you cheers.">
@@ -122,18 +141,11 @@ export function renderLanding(root: HTMLElement): void {
     </section>
 
     <section class="l-block">
-      <div class="phone" aria-hidden="true">
-        <div class="phone-screen">
-          <span class="l-label">Lock</span>
-          <b class="phone-title">50 NIM into Rent buffer</b>
-          <ul class="steps-done">
-            <li>${tick}Approve in Nimiq Pay</li>
-            <li>${tick}Staked from your own wallet</li>
-            <li>${tick}Earning staking rewards</li>
-            <li>${tick}Visible to your Goalkeeper</li>
-          </ul>
-          <div class="phone-result">🔒 Sealed. Still yours.</div>
-        </div>
+      <div class="l-panel lock-panel">
+        <span class="l-label">Lock</span>
+        <b class="lock-title">50 NIM into Rent buffer</b>
+        ${lockChain}
+        <div class="lock-result">🔒 Sealed. Still yours.</div>
       </div>
       <h2>Locked is not gone. It never leaves your wallet.</h2>
       <p class="lead">Saving in Holdfast means staking. Your NIM stays in your own Nimiq wallet and earns rewards while it waits.
@@ -161,7 +173,7 @@ export function renderLanding(root: HTMLElement): void {
     </section>
 
     <section class="l-faq">
-      <h2>Questions</h2>
+      <h2>FAQs</h2>
       ${FAQ.map(([q, a]) => html`<details class="faq"><summary><span>${q}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><p>${a}</p></details>`)}
     </section>
 
