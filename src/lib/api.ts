@@ -9,7 +9,8 @@ export interface PublicProfile {
   joinedAt: number
 }
 export interface LeaderboardRow extends PublicProfile {
-  rank: number
+  /** null until the profile has at least one referral. Equal counts share a rank. */
+  rank: number | null
 }
 export interface OwnProfile extends PublicProfile {
   fullAddress: string
@@ -55,7 +56,7 @@ async function call<T>(action: string, opts: { body?: unknown; token?: string | 
 }
 
 export const api = {
-  leaderboard: () => call<{ total: number; top: LeaderboardRow[] }>('leaderboard'),
+  leaderboard: () => call<{ total: number; ranked?: number; top: LeaderboardRow[] }>('leaderboard'),
   invite: (code: string) => call<{ code: string; name: string }>('invite', { query: { code } }),
   challenge: (address: string) => call<{ message: string }>('challenge', { body: { address } }),
   login: (body: { message: string; publicKey: string; signature: string; browserId: string; deviceId: string | null; ref: string | null }) =>

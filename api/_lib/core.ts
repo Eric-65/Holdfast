@@ -277,13 +277,45 @@ function hashToObject(flat: unknown): Record<string, string> {
   return out
 }
 
+interface Standing {
+  address: string
+  referrals: number
+  joinedAt: number
+  /** null until the profile has at least one referral. */
+  rank: number | null
+}
+
+/**
+ * Every profile in leaderboard order: most referrals first. Profiles with the same number share
+ * a rank (1, 2, 2, 4), and among them the one who joined first is listed first. A profile needs
+ * at least one referral to be ranked; the rest are listed after, by join date, without a rank.
+ * Reads the whole board, which is fine for thousands of profiles.
+ */
+async function standings(ctx: RequestContext): Promise<Standing[]> {
+  const flat = await ctx.store.cmd<unknown>('ZRANGE', 'lb', 0, -1, 'WITHSCORES')
+  const list = Array.isArray(flat) ? flat.map(String) : []
+  const rows: Standing[] = []
+  for (let i = 0; i + 1 < list.length; i += 2) rows.push({ address: list[i]!, referrals: Number(list[i + 1]) || 0, joinedAt: 0, rank: null })
+  const joined = await ctx.store.pipeline(rows.map((r) => ['HGET', userKey(r.address), 'createdAt'] as Command))
+  rows.forEach((r, i) => (r.joinedAt = Number(joined[i] ?? 0) || Number.MAX_SAFE_INTEGER))
+  rows.sort((a, b) => b.referrals - a.referrals || a.joinedAt - b.joinedAt || (a.address < b.address ? -1 : 1))
+  rows.forEach((r, i) => {
+    if (r.referrals <= 0) return
+    const prev = rows[i - 1]
+    r.rank = prev && prev.referrals === r.referrals ? prev.rank : i + 1
+  })
+  return rows
+}
+
 export async function ownProfile(ctx: RequestContext, address: string): Promise<OwnProfile> {
-  const [rawUser, score, rank, refs] = await ctx.store.pipeline([
+  const [rawUser, refs, refCount] = await ctx.store.pipeline([
     ['HGETALL', userKey(address)],
-    ['ZSCORE', 'lb', address],
-    ['ZREVRANK', 'lb', address],
     ['ZRANGE', `refs:${address}`, 0, REFERRAL_LIST_SIZE - 1, 'REV', 'WITHSCORES'],
+    ['ZCARD', `refs:${address}`],
   ])
+  const board = await standings(ctx)
+  const mine = board.find((s) => s.address === address)
+  const rank = mine?.rank ?? null
   const user = hashToObject(rawUser)
   if (!user.address) throw new ApiError(401, 'signed_out', 'Please sign in with your wallet again.')
 
@@ -300,9 +332,10 @@ export async function ownProfile(ctx: RequestContext, address: string): Promise<
     address: shortAddress(address),
     fullAddress: address,
     code: user.code ?? '',
-    referrals: Number(score ?? 0),
+    // The list of referred wallets is the record; the leaderboard score is kept in step with it.
+    referrals: Math.max(Number(refCount ?? 0), mine?.referrals ?? 0),
     joinedAt: Number(user.createdAt ?? 0),
-    rank: rank === null || rank === undefined ? null : Number(rank) + 1,
+    rank,
     referredBy: user.referredBy ? String(lookups[referred.length] ?? defaultName(user.referredBy)) : null,
     canClaimInvite: !user.referredBy && ctx.now - Number(user.createdAt ?? 0) <= CLAIM_WINDOW_MS,
     referralList: referred.map((r, i) => ({
@@ -321,26 +354,24 @@ export async function setName(ctx: RequestContext, address: string, body: { name
   return ownProfile(ctx, address)
 }
 
-export async function leaderboard(ctx: RequestContext): Promise<{ total: number; top: (PublicProfile & { rank: number })[] }> {
-  const [flat, total] = await ctx.store.pipeline([
-    ['ZRANGE', 'lb', 0, LEADERBOARD_SIZE - 1, 'REV', 'WITHSCORES'],
-    ['ZCARD', 'lb'],
-  ])
-  const list = Array.isArray(flat) ? flat.map(String) : []
-  const rows: { address: string; referrals: number }[] = []
-  for (let i = 0; i + 1 < list.length; i += 2) rows.push({ address: list[i]!, referrals: Number(list[i + 1]) })
-  const users = await ctx.store.pipeline(rows.map((r) => ['HMGET', userKey(r.address), 'name', 'code', 'createdAt']))
+export async function leaderboard(
+  ctx: RequestContext,
+): Promise<{ total: number; ranked: number; top: (PublicProfile & { rank: number | null })[] }> {
+  const board = await standings(ctx)
+  const top = board.slice(0, LEADERBOARD_SIZE)
+  const users = await ctx.store.pipeline(top.map((r) => ['HMGET', userKey(r.address), 'name', 'code']))
   return {
-    total: Number(total ?? 0),
-    top: rows.map((r, i) => {
-      const [name, code, createdAt] = Array.isArray(users[i]) ? (users[i] as (string | null)[]) : []
+    total: board.length,
+    ranked: board.filter((r) => r.rank !== null).length,
+    top: top.map((r, i) => {
+      const [name, code] = Array.isArray(users[i]) ? (users[i] as (string | null)[]) : []
       return {
-        rank: i + 1,
+        rank: r.rank,
         name: name ?? defaultName(r.address),
         address: shortAddress(r.address),
         code: code ?? '',
         referrals: r.referrals,
-        joinedAt: Number(createdAt ?? 0),
+        joinedAt: r.joinedAt === Number.MAX_SAFE_INTEGER ? 0 : r.joinedAt,
       }
     }),
   }

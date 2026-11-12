@@ -138,7 +138,7 @@ export function renderProfile(root: HTMLElement): void {
 
     <section class="stat-row">
       <div class="stat"><b>${p.referrals}</b><span>${p.referrals === 1 ? 'referral' : 'referrals'}</span></div>
-      <a class="stat" href="#/board"><b>${p.rank ? `#${p.rank}` : '–'}</b><span>leaderboard</span></a>
+      <a class="stat" href="#/board"><b>${p.rank ? `#${p.rank}` : '–'}</b><span>${p.rank ? 'leaderboard' : 'not ranked yet'}</span></a>
       <div class="stat"><b>${new Date(p.joinedAt).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</b><span>joined</span></div>
     </section>
 
@@ -300,8 +300,13 @@ export function renderBoard(root: HTMLElement): void {
               ${
                 board.rows.length
                   ? html`<ol class="people board">${board.rows.map(
-                      (r) => html`<li class="${me && r.code === me.code ? 'is-me' : ''}">
-                        <span class="rank">${MEDALS[r.rank - 1] ?? r.rank}</span>
+                      (r, i) => html`${
+                        // Everyone below this line has no referrals yet, so has no rank.
+                        r.rank === null && (i === 0 || board!.rows[i - 1]!.rank !== null)
+                          ? html`<li class="board-divider" aria-hidden="true"><span>${i === 0 ? 'No referrals yet. Invite a friend to take #1' : 'Not ranked yet'}</span></li>`
+                          : ''
+                      }<li class="${me && r.code === me.code ? 'is-me' : ''}">
+                        <span class="rank">${r.rank === null ? '–' : (MEDALS[r.rank - 1] ?? r.rank)}</span>
                         ${avatar(r.name, r.address)}
                         <div class="who"><b>${r.name}${me && r.code === me.code ? html` <span class="chip chip-lock">You</span>` : ''}</b>
                           <span class="muted small mono">${r.address}</span></div>

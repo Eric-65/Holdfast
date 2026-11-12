@@ -73,7 +73,7 @@ Holdfast shows each step and tells you what to do next.
    - **Same network:** if Holdfast is opened in Nimiq Pay within 30 minutes of the invite link being opened from the same network, the new profile is matched to that inviter. If links from two different inviters were opened from that network, nothing is guessed.
    - **Invite code field:** when creating a profile, a friend can type the inviter's code or paste their link.
    - **Who invited you?:** a profile with no inviter can add one from the Profile screen, once, in its first week. Opening the inviter's link inside Nimiq Pay does the same automatically.
-4. **Leaderboard.** The 🏆 tab ranks profiles by referrals. Anyone can view it, with or without a wallet. It shows display names and shortened addresses.
+4. **Leaderboard.** The 🏆 tab ranks profiles by referrals, most first. Every profile's invite link counts the same way. Profiles with the same number of referrals share a rank, and the one who joined first is listed first. A profile needs at least one referral to get a rank; the rest are listed under **Not ranked yet**. Anyone can view the board, with or without a wallet. It shows display names and shortened addresses.
 
 **What Holdfast stores for each profile**, as evidence that it is a real, unique user:
 
@@ -100,7 +100,7 @@ Each profile also records how many wallets had already used the same device and 
 | Wallet connection screens (approved, declined, no answer, retry) | ✅ Tested in a browser with a simulated Nimiq Pay wallet |
 | **Open in Nimiq Pay** button | ⚠️ Built from the documented link format. Needs a check on a phone with Nimiq Pay installed |
 | Profiles, sign-in with a wallet signature, invite links, referrals, leaderboard | ✅ Built. Tested in a browser with simulated wallets that sign the way Nimiq wallets do. Needs a check with real Nimiq Pay signatures |
-| Amount parsing, address checks, goal history, share links, sign-in and referral rules | ✅ 43 automated tests |
+| Amount parsing, address checks, goal history, share links, sign-in and referral rules | ✅ 44 automated tests |
 | Real staking transactions inside Nimiq Pay | ⚠️ Built with the official Nimiq SDK. Needs a final check on a real device |
 | Live progress straight from the blockchain | ⚙️ Works when an RPC address is set (see [Settings](#settings)). Otherwise it uses Holdfast's own records |
 

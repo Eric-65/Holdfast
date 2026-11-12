@@ -88,7 +88,7 @@ describe('sign-in', () => {
     expect(r.profile.fullAddress).toBe(w.address)
     expect(r.profile.name).toBe(`Saver ${w.address.replace(/\s/g, '').slice(-4)}`)
     expect(r.profile.code).toMatch(/^[2-9A-Z]{7}$/)
-    expect(r.profile.rank).toBe(1)
+    expect(r.profile.rank).toBeNull() // no referrals yet, so not ranked
     expect(await authenticate(ctx(), `Bearer ${r.token}`)).toBe(w.address)
   })
 
@@ -206,6 +206,37 @@ describe('referrals and leaderboard', () => {
     expect(strict.referralCounted).toBe(false)
     expect(await store.cmd('HGET', `u:${sock2.address.replace(/\s/g, '')}`, 'referralStatus')).toBe('not_counted_duplicate_device')
     expect((await ownProfile(ctx(), alice.address)).referrals).toBe(1)
+  })
+
+  it('ranks only profiles with referrals; ties share a rank, earlier joiner first', async () => {
+    const [a, b, c] = [makeWallet(), makeWallet(), makeWallet()]
+    const pa = await join(a)
+    now += 1000
+    const pb = await join(b)
+    now += 1000
+    const pc = await join(c)
+    // Nobody has referrals: nobody is ranked, listed by join date.
+    let board = await leaderboard(ctx())
+    expect(board.top.map((r) => [r.rank, r.name])).toEqual([[null, pa.profile.name], [null, pb.profile.name], [null, pc.profile.name]])
+    expect(board.ranked).toBe(0)
+    // C and B each bring one friend (C first), A brings two.
+    now += 1000
+    await join(makeWallet(), { ref: pc.profile.code })
+    now += 1000
+    await join(makeWallet(), { ref: pb.profile.code })
+    await join(makeWallet(), { ref: pa.profile.code })
+    await join(makeWallet(), { ref: pa.profile.code })
+    board = await leaderboard(ctx())
+    expect(board.top.slice(0, 3).map((r) => [r.rank, r.name, r.referrals])).toEqual([
+      [1, pa.profile.name, 2],
+      [2, pb.profile.name, 1], // tied with C; B joined first
+      [2, pc.profile.name, 1],
+    ])
+    expect(board.top[3]!.rank).toBeNull()
+    expect(board.ranked).toBe(3)
+    expect(board.total).toBe(7)
+    expect((await ownProfile(ctx(), c.address)).rank).toBe(2)
+    expect((await ownProfile(ctx(), c.address)).referrals).toBe(1)
   })
 
   it('ranks profiles by referrals', async () => {

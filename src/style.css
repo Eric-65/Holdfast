@@ -324,3 +324,8 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 .invite-banner { animation: invite-out 0.5s ease both; }
 @keyframes invite-out { to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .invite-banner { animation: none; } }
+
+.board li.board-divider { display: block; padding: 12px 0 6px; border-bottom: 0; text-align: center; font-size: 0.8rem; font-weight: 700; color: var(--muted); }
+.board li.board-divider + li { border-top: 1px solid var(--line); }
+.board li.board-divider:first-child { padding-top: 6px; }
+.board li.board-divider:first-child + li { border-top: 0; }
