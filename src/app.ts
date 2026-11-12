@@ -77,23 +77,54 @@ export async function attachWallet(wallet: Wallet): Promise<void> {
   ctx.state = loadState(ctx.address)
   wallet.onAccountsChanged((next) => {
     ctx.accounts = next
+    // Nimiq Pay replaced the balance address; the old reading no longer applies.
+    balanceFetchedAt = 0
     void refreshChain()
   })
   emit(true)
   void refreshChain()
 }
 
+/** Staked amounts from the blockchain (only when an RPC endpoint is configured). */
 export async function refreshChain(): Promise<void> {
-  const w = ctx.wallet
-  if (!w || !ctx.accounts.length) return
-  const [stake, balances] = await Promise.all([
-    chainAvailable() ? getStakeTotals(ctx.accounts) : Promise.resolve(null),
-    Promise.all(ctx.accounts.map((a) => w.getBalance(a).catch(() => null))),
-  ])
-  ctx.stake = stake
-  const known = balances.filter((b): b is number => b !== null)
-  ctx.walletBalance = known.length ? known.reduce((a, b) => a + b, 0) : null
+  if (!ctx.wallet || !ctx.accounts.length || !chainAvailable()) return
+  ctx.stake = await getStakeTotals(ctx.accounts)
   emit()
+}
+
+const BALANCE_FRESH_MS = 60_000
+const BALANCE_RETRY_MS = 5 * 60_000
+let balanceFetchedAt = 0
+let balanceRetryAt = 0
+let balanceInFlight = false
+
+/**
+ * Spendable NIM, for the "Wallet: X NIM" hint on the lock form. It is only a hint, so Holdfast
+ * asks sparingly: one lookup, only when the goal screen needs it, at most once a minute. Nimiq Pay
+ * shows its own "Error getting balance" message whenever a lookup fails, so after a failure
+ * Holdfast waits five minutes before asking again instead of repeating the error.
+ * `changed` = a transaction just went through, so a recent reading is out of date.
+ */
+export async function refreshBalance(changed = false): Promise<void> {
+  const w = ctx.wallet
+  const now = Date.now()
+  if (!w || !ctx.accounts.length || balanceInFlight || now < balanceRetryAt) return
+  if (!changed && now - balanceFetchedAt < BALANCE_FRESH_MS) return
+  // Nimiq Pay keeps spendable NIM at the second address (its payment contract) when there is one.
+  const address = ctx.accounts[1] ?? ctx.accounts[0]!
+  balanceInFlight = true
+  try {
+    const balance = await w.getBalance(address)
+    balanceFetchedAt = Date.now()
+    if (typeof balance === 'number' && balance !== ctx.walletBalance) {
+      ctx.walletBalance = balance
+      emit()
+    }
+  } catch {
+    balanceRetryAt = Date.now() + BALANCE_RETRY_MS
+  } finally {
+    balanceInFlight = false
+  }
 }
 
 export async function refreshPrices(): Promise<void> {
@@ -101,8 +132,9 @@ export async function refreshPrices(): Promise<void> {
   emit()
 }
 
-export async function loadValidators(): Promise<void> {
-  if (ctx.validatorsLoaded) return
+/** `retry` asks again when an earlier attempt came back empty (for example while offline). */
+export async function loadValidators(retry = false): Promise<void> {
+  if (ctx.validatorsLoaded && !(retry && !ctx.validators.length)) return
   ctx.validators = await fetchValidators()
   ctx.validatorsLoaded = true
   emit()

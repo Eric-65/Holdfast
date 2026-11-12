@@ -1,4 +1,4 @@
-import { ctx, commit, refreshChain, loadValidators, fiatValues } from '../app'
+import { ctx, commit, refreshBalance, refreshChain, loadValidators, fiatValues } from '../app'
 import { chainAvailable } from '../lib/chain'
 import { formatFiat, formatNim, formatAddress, isValidAddress, parseNimInput, pct, shortAddress, timeAgo, toLuna, toNim } from '../lib/format'
 import {
@@ -344,6 +344,8 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
     toast(`Goal reached: ${goal.name}! 🎉`, 'success')
     return
   }
+  // The lock form shows the wallet balance as a hint; this is the only screen that asks for it.
+  void refreshBalance()
   const p = pct(saved, goal.targetLuna)
   const left = Math.max(0, goal.targetLuna - saved)
   const rewards = ctx.stake ? saved - goal.lockedLuna : 0
@@ -463,12 +465,21 @@ async function lock(goal: Goal, luna: number): Promise<void> {
     if (existingStaker) {
       tx = await w.sendStakeTransaction({ value: luna })
     } else {
-      if (!goal.validator) {
-        toast('Choose a validator first (close and recreate the goal with one)', 'error')
-        return
+      // A goal created before the validator list had loaded has no validator yet. Use the
+      // top-ranked one, which is also the form's default choice, and remember it on the goal.
+      let validator = goal.validator
+      if (!validator) {
+        await loadValidators(true)
+        validator = ctx.validators[0] ? formatAddress(ctx.validators[0].address) : null
+        if (!validator) {
+          toast("Couldn't load the validator list. Check your connection and try again.", 'error')
+          return
+        }
+        const current = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
+        commit(replaceGoal(ctx.state, { ...current, validator }))
       }
       try {
-        tx = await w.sendNewStakerTransaction({ delegation: goal.validator, value: luna })
+        tx = await w.sendNewStakerTransaction({ delegation: validator, value: luna })
       } catch (err) {
         // Already a staker (e.g. staked earlier in Nimiq Pay): add to the existing stake instead.
         if (isUserRejection(err)) throw err
@@ -478,7 +489,7 @@ async function lock(goal: Goal, luna: number): Promise<void> {
     const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
     commit({ ...replaceGoal(ctx.state, recordLock(latest, luna, tx)), stakerCreated: true })
     toast(`Locked ${formatNim(luna)} NIM. Hold fast! 🔒`, 'success')
-    setTimeout(() => void refreshChain(), 4000)
+    setTimeout(() => (void refreshChain(), void refreshBalance(true)), 4000)
   } catch (err) {
     toast(isUserRejection(err) ? 'Cancelled' : `Could not lock: ${errorMessage(err)}`, isUserRejection(err) ? 'info' : 'error')
   }
@@ -595,7 +606,7 @@ async function startUnlock(goal: Goal, luna: number): Promise<boolean> {
     const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
     commit(replaceGoal(ctx.state, recordUnlockStart(latest, luna, tx)))
     toast('Seal broken. Your NIM is cooling down.', 'info')
-    setTimeout(() => void refreshChain(), 4000)
+    setTimeout(() => (void refreshChain(), void refreshBalance(true)), 4000)
     return true
   } catch (err) {
     toast(isUserRejection(err) ? 'Cancelled. Still sealed 🔒' : `Could not unlock: ${errorMessage(err)}`, isUserRejection(err) ? 'info' : 'error')
@@ -640,7 +651,7 @@ function bindUnlockCard(root: HTMLElement, goal: Goal): void {
           commit(replaceGoal(ctx.state, recordRelease(latest, tx)))
           toast('NIM returned to your wallet.', 'info')
         }
-        setTimeout(() => void refreshChain(), 4000)
+        setTimeout(() => (void refreshChain(), void refreshBalance(true)), 4000)
       } catch (err) {
         toast(
           isUserRejection(err) ? 'Cancelled' : `Not yet: ${errorMessage(err)}. The cool-down may still be running.`,
