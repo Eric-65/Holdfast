@@ -25,24 +25,68 @@ const EMOJIS = ['🎯', '🏠', '🎓', '✈️', '🚗', '💍', '📱', '🛡�
 
 // ---------- Landing (not connected) ----------
 
+/** Tick used in the landing page's mock screens. */
+const tick = raw(`<svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m7.5 12.5 3 3 6-6.5"/></svg>`)
+
+/** Who does what: you lock NIM into the goal, your Goalkeeper sees the progress and cheers you on. */
+const keeperDiagram = raw(`<svg class="diagram" viewBox="0 0 360 240" role="img" aria-label="You lock NIM into your goal. Your Goalkeeper sees the progress and sends you cheers.">
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z"/></marker></defs>
+  <path class="edge" d="M98 96 Q180 34 238 54" marker-end="url(#arrow)"/>
+  <path class="edge" d="M274 100 V140" marker-end="url(#arrow)"/>
+  <path class="edge" d="M238 186 Q160 214 96 148" marker-end="url(#arrow)"/>
+  <text class="edge-label" x="150" y="46">lock NIM</text>
+  <text class="edge-label" x="286" y="125">progress</text>
+  <text class="edge-label" x="128" y="216">cheers</text>
+  <g class="node"><circle cx="64" cy="120" r="36"/><text x="64" y="125">You</text></g>
+  <g class="node node-goal"><circle cx="274" cy="62" r="36"/><text x="274" y="67">Goal</text></g>
+  <g class="node"><circle cx="274" cy="180" r="36"/><text x="274" y="185">Friend</text></g>
+</svg>`)
+
+const FAQ: [string, string][] = [
+  [
+    'Do I need Nimiq Pay?',
+    'Yes. Holdfast is a Mini App that runs inside the Nimiq Pay wallet, so saving and locking happen there. A friend who is only your Goalkeeper can follow your progress in any browser.',
+  ],
+  [
+    'Where is my money while it is locked?',
+    'In your own wallet. Locking stakes your NIM on the Nimiq network from your wallet. Holdfast never holds your funds or your keys, and you approve every transaction in Nimiq Pay.',
+  ],
+  [
+    'Can I take my money out?',
+    'Always. Tap Break the seal, type the goal name to confirm, and Holdfast walks you through the three unstaking steps. The Nimiq network adds a cool-down before the NIM is back in your balance, and your Goalkeeper sees that you withdrew.',
+  ],
+  [
+    'What does my Goalkeeper see?',
+    'Your goal name, target, progress and public wallet address, and whether the seal is broken. They can send you a cheer in NIM. They cannot move or touch your savings.',
+  ],
+  [
+    'What does it cost?',
+    'Holdfast is free and takes no cut of your savings or rewards. The validator your stake is delegated to may keep a small share of the staking rewards.',
+  ],
+  [
+    'What if I lose my phone?',
+    'Your staked NIM belongs to your Nimiq wallet, not to Holdfast. Restore the wallet in Nimiq Pay and the stake is still there. Goal names and history are saved on the device, so you would set those up again.',
+  ],
+]
+
 export function renderLanding(root: HTMLElement): void {
   // An invited visitor keeps their invite code when they move over to Nimiq Pay.
   const inviteCode = ctx.invite?.code ?? pendingInviteCode()
   const deepLink = nimiqPayDeepLink(miniAppTarget(location, inviteCode))
   const pasteUrl = miniAppUrl(location, inviteCode)
   const mobile = isMobileDevice()
-  root.innerHTML = html`${header()}
+  const openButton = (id: string, cls: string, label: string) =>
+    html`<a class="btn btn-primary open-np ${cls}" ${id ? raw(`id="${id}"`) : ''} href="${deepLink}">${label}</a>`
+
+  root.innerHTML = html`<div class="landing-wrap">
+  ${header(openButton('open-nimiq-pay', 'btn-compact', 'Open in Nimiq Pay'))}
   <main class="page landing">
     ${ctx.invite ? html`<p class="invite-banner">🎉 <b>${ctx.invite.name}</b> invited you to Holdfast</p>` : ''}
-    <section class="card outside-card">
-      <div class="outside-head">
-        <span class="outside-icon" aria-hidden="true">📱</span>
-        <div>
-          <h2>You're outside Nimiq Pay</h2>
-          <p>Look around here. Saving and locking NIM works inside the Nimiq Pay wallet.</p>
-        </div>
-      </div>
-      <a class="btn btn-primary" id="open-nimiq-pay" href="${deepLink}">Open in Nimiq Pay ↗</a>
+
+    <section class="l-hero">
+      <h1>Save it. Stake it. <span class="gold">Hold fast.</span></h1>
+      <p class="lead">Lock savings goals by staking NIM from your own wallet. It earns rewards, stays yours,
+        and a trusted friend keeps you honest.</p>
       <div id="open-help" class="open-help ${mobile ? 'hidden' : ''}">
         <p><b>${mobile ? 'Nothing happened?' : 'On a computer?'}</b>
           ${mobile ? 'Nimiq Pay may not be installed, or your browser blocked the link.' : 'Open this page on the phone where Nimiq Pay is installed, or:'}</p>
@@ -55,24 +99,90 @@ export function renderLanding(root: HTMLElement): void {
         <button class="btn btn-secondary" id="copy-url">Copy address</button>
       </div>
     </section>
-    <section class="hero">
-      <h1>Save it. Stake it. <span class="gold">Hold fast.</span></h1>
-      <p class="lead">Lock savings goals by staking NIM from your own wallet. It earns rewards, stays yours,
-        and a trusted friend keeps you honest.</p>
+
+    <section class="l-panel" aria-label="Saving without Holdfast">
+      <h3 class="l-label">Your savings, most months</h3>
+      <div class="bubbles">
+        <p>I'll just borrow 20 from savings</p>
+        <p class="right">putting it back on Friday</p>
+        <p>wait, how much was in there?</p>
+        <p class="right">it's only this once (again)</p>
+        <p>new goal: start over next month</p>
+      </div>
     </section>
-    <ol class="pillars">
-      <li><b>🔒 Lock it</b><span>Saving = staking. The unstaking cool-down puts a speed bump in front of impulse withdrawals.</span></li>
-      <li><b>🛡️ Goalkeeper</b><span>Share a link with one friend. They see your progress, send a cheer in NIM and see if you break the seal.</span></li>
-      <li><b>💵 Dollar view</b><span>Every goal in NIM, USDT and NGN.</span></li>
-    </ol>
-    ${ctx.apiAvailable ? html`<a class="btn btn-ghost" href="#/board">🏆 See the leaderboard</a>` : ''}
-  </main>`.html
+
+    <section class="l-panel" aria-label="The same month with Holdfast">
+      <h3 class="l-label">The same month in Holdfast</h3>
+      <ul class="l-rows">
+        <li><span>500 NIM locked for Rent buffer</span><span class="chip chip-lock">Sealed</span></li>
+        <li><span>Staking rewards on your goal</span><span class="chip chip-good">Earning</span></li>
+        <li><span>Ada cheered you 10 NIM</span><span class="chip chip-gold">Cheer</span></li>
+        <li><span>Impulse withdrawal</span><span class="chip chip-bad">Cool-down</span></li>
+      </ul>
+    </section>
+
+    <section class="l-block">
+      <div class="phone" aria-hidden="true">
+        <div class="phone-screen">
+          <span class="l-label">Lock</span>
+          <b class="phone-title">50 NIM into Rent buffer</b>
+          <ul class="steps-done">
+            <li>${tick}Approve in Nimiq Pay</li>
+            <li>${tick}Staked from your own wallet</li>
+            <li>${tick}Earning staking rewards</li>
+            <li>${tick}Visible to your Goalkeeper</li>
+          </ul>
+          <div class="phone-result">🔒 Sealed. Still yours.</div>
+        </div>
+      </div>
+      <h2>Locked is not gone. It never leaves your wallet.</h2>
+      <p class="lead">Saving in Holdfast means staking. Your NIM stays in your own Nimiq wallet and earns rewards while it waits.
+        Getting it back takes a deliberate, three-step withdrawal, which is exactly the speed bump an impulse needs.</p>
+    </section>
+
+    <section class="l-block">
+      <div class="l-panel">${keeperDiagram}</div>
+      <h2>One friend keeps you honest.</h2>
+      <p class="lead">Share a link with a friend you trust. Without signing up, your Goalkeeper sees your progress,
+        can send you a cheer in NIM, and sees it if you break the seal.</p>
+    </section>
+
+    <section class="l-block">
+      <div class="l-panel">
+        <h3 class="l-label">Rent buffer, 37% there</h3>
+        <ul class="l-rows worth">
+          <li><span>NIM</span><b>1,500</b></li>
+          <li><span>USDT</span><b>1.80</b></li>
+          <li><span>Naira</span><b>₦2,775</b></li>
+        </ul>
+      </div>
+      <h2>Know what your goal is worth.</h2>
+      <p class="lead">Every goal shows in NIM, USDT and naira, and you can set your target in whichever one you think in.</p>
+    </section>
+
+    <section class="l-faq">
+      <h2>Questions</h2>
+      ${FAQ.map(([q, a]) => html`<details class="faq"><summary><span>${q}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><p>${a}</p></details>`)}
+    </section>
+
+    <section class="l-end">
+      ${openButton('', '', 'Open in Nimiq Pay ↗')}
+      ${ctx.apiAvailable ? html`<a class="btn btn-ghost" href="#/board">🏆 See the leaderboard</a>` : ''}
+      <p class="muted small center">Holdfast is non-custodial. It never holds your NIM.</p>
+    </section>
+  </main></div>`.html
+
   // If Nimiq Pay doesn't take over within a few seconds, show the manual way in.
-  $('#open-nimiq-pay', root)!.addEventListener('click', () => {
-    window.setTimeout(() => {
-      if (document.visibilityState === 'visible') $('#open-help')?.classList.remove('hidden')
-    }, 2500)
-  })
+  $$<HTMLAnchorElement>('.open-np', root).forEach((link) =>
+    link.addEventListener('click', () => {
+      window.setTimeout(() => {
+        if (document.visibilityState !== 'visible') return
+        const help = $('#open-help')
+        help?.classList.remove('hidden')
+        help?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 2500)
+    }),
+  )
   $('#copy-url', root)!.addEventListener('click', async () => {
     if (await copyText(pasteUrl)) toast('Address copied. Paste it in Nimiq Pay.', 'success')
     else toast('Copy failed. Long-press the address to copy.', 'error')

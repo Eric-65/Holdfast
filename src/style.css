@@ -91,18 +91,10 @@ a { color: inherit; }
 .lead { font-size: 1.05rem; color: var(--ink-2); }
 .eyebrow { text-align: center; color: var(--muted); margin: 8px 0 -6px; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; }
 
-.pillars { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
-.pillars li { background: var(--surface); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); display: grid; gap: 2px; }
-.pillars span { color: var(--ink-2); font-size: 0.93rem; }
 
 .card { background: var(--surface); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
 .card.center { text-align: center; }
 
-.outside-card { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; border: 2px solid color-mix(in srgb, var(--gold) 55%, transparent); }
-.outside-head { display: flex; gap: 12px; align-items: flex-start; }
-.outside-head h2 { font-size: 1.15rem; margin-bottom: 4px; }
-.outside-head p { margin: 0; color: var(--ink-2); font-size: 0.95rem; }
-.outside-icon { font-size: 1.6rem; line-height: 1.2; }
 .open-help { border-top: 1px solid var(--line); padding-top: 12px; font-size: 0.93rem; }
 .open-help ol { margin: 0 0 10px; padding-left: 20px; color: var(--ink-2); }
 .open-help li { margin: 4px 0; }
@@ -256,3 +248,64 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 .stored-list { margin: 6px 0 8px; padding-left: 20px; color: var(--ink-2); }
 .stored-list li { margin: 5px 0; }
 .invite-banner { margin: 6px 0 -4px; padding: 10px 14px; border-radius: 14px; text-align: center; background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--ink); }
+
+/* ---------- Landing page (outside Nimiq Pay) ---------- */
+.landing-wrap > .topbar {
+  position: sticky; top: 0; z-index: 8;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.btn-compact { width: auto; min-height: 42px; padding: 8px 16px; font-size: 0.92rem; white-space: nowrap; border-radius: 12px; }
+.landing { gap: 22px; padding-top: 14px; }
+.landing h2 { font-size: 1.7rem; letter-spacing: -0.02em; margin: 0; }
+.l-hero { padding: 14px 2px 0; display: flex; flex-direction: column; gap: 8px; }
+.l-hero h1 { font-size: 2.3rem; line-height: 1.08; margin: 0; }
+.l-hero .open-help { border-top: 0; padding: 16px; background: var(--surface); border: 1.5px solid var(--line); border-radius: 22px; }
+
+.l-panel { background: var(--surface); border: 1.5px solid var(--line); border-radius: 26px; padding: 22px 20px; }
+.l-label { display: block; margin: 0 0 14px; font-size: 0.9rem; font-weight: 800; color: var(--muted); letter-spacing: 0; }
+.bubbles { display: flex; flex-direction: column; gap: 10px; }
+.bubbles p { margin: 0; align-self: flex-start; max-width: 88%; padding: 10px 15px; border-radius: 18px 18px 18px 6px; background: var(--bg); color: var(--ink-2); }
+.bubbles p.right { align-self: flex-end; border-radius: 18px 18px 6px 18px; background: color-mix(in srgb, var(--lock) 11%, var(--bg)); }
+.l-rows { list-style: none; margin: 0; padding: 0; }
+.l-rows li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 0; border-bottom: 1.5px solid var(--line); }
+.l-rows li:first-child { padding-top: 0; }
+.l-rows li:last-child { border-bottom: 0; padding-bottom: 0; }
+.l-rows .chip { flex: 0 0 auto; }
+.l-rows.worth b { font-size: 1.25rem; }
+.l-rows.worth span { color: var(--ink-2); font-weight: 600; }
+.chip-gold { background: color-mix(in srgb, var(--gold-2) 30%, transparent); color: color-mix(in srgb, var(--gold) 70%, var(--ink)); }
+
+.l-block { display: flex; flex-direction: column; gap: 14px; }
+.l-block .lead { margin: 0; }
+.phone { align-self: center; width: min(100%, 340px); border: 11px solid var(--ink); border-radius: 44px; background: var(--surface); }
+[data-theme='dark'] .phone { border-color: #3d4380; }
+.phone-screen { padding: 26px 22px 22px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.phone-screen .l-label { margin: 0; color: var(--ink-2); }
+.phone-title { font-size: 1.35rem; text-align: center; margin-bottom: 8px; }
+.steps-done { list-style: none; margin: 0 0 10px; padding: 0; align-self: stretch; display: flex; flex-direction: column; gap: 9px; }
+.steps-done li { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.tick { flex: 0 0 auto; width: 22px; height: 22px; fill: none; stroke: var(--good); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.phone-result { align-self: stretch; padding: 13px 14px; border-radius: 14px; text-align: center; font-weight: 800; background: color-mix(in srgb, var(--good) 13%, transparent); color: var(--good); }
+
+.diagram { display: block; width: 100%; height: auto; }
+.diagram .edge { fill: none; stroke: var(--muted); stroke-width: 2; }
+.diagram marker path { fill: var(--muted); }
+.diagram .edge-label { fill: var(--muted); font-size: 13px; font-weight: 700; }
+.diagram .node circle { fill: var(--surface); stroke: var(--ink); stroke-width: 2.5; }
+.diagram .node-goal circle { fill: color-mix(in srgb, var(--gold-2) 30%, var(--surface)); stroke: var(--gold); }
+.diagram .node text { fill: var(--ink); font-size: 15px; font-weight: 800; text-anchor: middle; }
+
+.l-faq h2 { margin-bottom: 14px; }
+.faq { border-top: 1.5px solid var(--line); }
+.faq:last-of-type { border-bottom: 1.5px solid var(--line); }
+.faq summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 0; font-weight: 800; font-size: 1.08rem; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary svg { flex: 0 0 auto; width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s ease; }
+.faq[open] summary svg { transform: rotate(180deg); }
+.faq summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; border-radius: 6px; }
+.faq p { margin: 0 0 18px; color: var(--ink-2); }
+.l-end { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+@media (max-width: 360px) {
+  .landing-wrap .brand span { display: none; }
+  .l-hero h1 { font-size: 2rem; }
+}

@@ -62,7 +62,7 @@ Holdfast shows each step and tells you what to do next.
 
 ### Opening Holdfast
 - **In Nimiq Pay:** Holdfast connects to your wallet by itself. Nimiq Pay may ask you to approve sharing your wallet address. If the wallet doesn't answer or you decline, Holdfast shows a **Connect Nimiq Pay** button to try again.
-- **In a normal browser:** Holdfast tells you that you're outside Nimiq Pay and shows an **Open in Nimiq Pay** button. On a phone with Nimiq Pay installed, it opens the app there directly. If nothing happens, Holdfast shows the address to paste into Nimiq Pay under *Mini Apps → Custom URL*.
+- **In a normal browser:** Holdfast shows a landing page that explains how it works, with common questions at the end and an **Open in Nimiq Pay** button that stays at the top. On a phone with Nimiq Pay installed, it opens the app there directly. If nothing happens, Holdfast shows the address to paste into Nimiq Pay under *Mini Apps → Custom URL*.
 
 ### Profiles, invites and the leaderboard
 1. **Create your profile.** The first time your wallet connects, Holdfast offers to create your profile. You sign one message in Nimiq Pay. It is free, moves no NIM, and proves the wallet address is yours.
