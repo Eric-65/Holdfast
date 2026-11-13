@@ -97,6 +97,16 @@ function load(p: KeeperPayload, key: string): void {
   })
 }
 
+/**
+ * Whether the saver's starting stake is known, using the same rule as the saver's own screen: a
+ * goal that says so, or an older goal with a non-zero baseline. A link without a backed-up goal
+ * only has the baseline in the link, which is reliable when it is not zero.
+ */
+export function keeperBaselineKnown(g: { baselineFromChain?: boolean; baselineLuna: number } | null, p: { b: number }): boolean {
+  if (g) return g.baselineFromChain === true || (g.baselineFromChain === undefined && g.baselineLuna > 0)
+  return p.b > 0
+}
+
 export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
   const key = encodeKeeper(p)
   if (!data || data.key !== key || Date.now() - data.loadedAt > REFRESH_MS) load(p, key)
@@ -109,14 +119,18 @@ export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
   const target = g?.targetLuna ?? p.t
   const baseline = g ? g.baselineLuna : p.b
   const createdAt = g?.createdAt ?? p.c
-  // On-chain stake only counts once the saver's starting stake is known.
-  const chainOk = d.stake !== null && !(g && g.baselineFromChain === false)
+  // On-chain stake only counts once the saver's starting stake is known; otherwise stake from
+  // before the goal would be counted toward it.
+  const chainOk = d.stake !== null && keeperBaselineKnown(g, p)
   const snapshot = g ? g.savedLuna : p.s
   const saved = chainOk ? Math.max(0, d.stake!.balance - baseline) : snapshot
-  const leaving = d.stake ? d.stake.inactiveBalance + d.stake.retiredBalance : (g?.pendingUnlock?.luna ?? 0)
+  // Small differences (rounding, a few rewards paid out) are noise, not a broken seal.
+  const noise = Math.max(LUNA_PER_NIM, snapshot * 0.02)
+  const withdrawing = d.stake ? d.stake.inactiveBalance + d.stake.retiredBalance : (g?.pendingUnlock?.luna ?? 0)
+  const leaving = withdrawing > noise || (!!g?.pendingUnlock && withdrawing > 0) ? withdrawing : 0
   const sealBrokenAt = g?.sealBrokenAt ?? p.x ?? null
   // Stake that disappeared since the last update, without a withdrawal through Holdfast.
-  const dropped = chainOk && snapshot - saved > Math.max(LUNA_PER_NIM, snapshot * 0.02)
+  const dropped = chainOk && snapshot - saved > noise
   const reached = !!g?.reachedAt || saved >= target
   const closed = !!g && g.status !== 'active' && !reached
   const broken = !reached && (!!sealBrokenAt || leaving > 0 || dropped)

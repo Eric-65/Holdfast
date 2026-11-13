@@ -1,4 +1,4 @@
-import { getStakeTotals, fetchCheers, fetchValidators, chainAvailable, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
+import { getStakeTotals, fetchCheers, fetchValidators, chainAvailable, readFreshFor, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
 import { getPrices, type PriceState } from './lib/prices'
 import { activeGoal, baselineUnknown, loadState, replaceGoal, saveState, withChainBaseline, type StoreState } from './lib/store'
 import { hostFiat, hostNetwork, type Wallet } from './lib/wallet'
@@ -105,17 +105,32 @@ export async function attachWallet(wallet: Wallet): Promise<void> {
 }
 
 /** Staked amounts from the blockchain (only when an RPC endpoint is configured). */
-export async function refreshChain(): Promise<void> {
-  if (!ctx.wallet || !ctx.accounts.length || !chainAvailable()) return
-  // Keep the last good reading if the network doesn't answer this time.
+/**
+ * Read stake from the blockchain. Returns this reading, or null if the network did not answer.
+ * On a failed read the last good reading stays on screen (ctx.stake), but callers that are about
+ * to send a transaction must use the return value, never ctx.stake, so they never act on an old
+ * number.
+ */
+export async function refreshChain(): Promise<StakerInfo | null> {
+  if (!ctx.wallet || !ctx.accounts.length || !chainAvailable()) return null
   const stake = await getStakeTotals(ctx.accounts)
   if (stake) ctx.stake = stake
   const goal = activeGoal(ctx.state)
   if (ctx.stake && goal && baselineUnknown(goal)) {
     const fixed = withChainBaseline(goal, ctx.stake.balance)
-    if (fixed !== goal) return commit(replaceGoal(ctx.state, fixed), { quiet: true })
+    if (fixed !== goal) {
+      commit(replaceGoal(ctx.state, fixed), { quiet: true })
+      return stake
+    }
   }
   emit()
+  return stake
+}
+
+/** A reading straight from the network, skipping any cached answer. For use right before a transaction. */
+export async function readLiveStake(): Promise<StakerInfo | null> {
+  readFreshFor(5_000)
+  return refreshChain()
 }
 
 const CHEERS_FRESH_MS = 60_000

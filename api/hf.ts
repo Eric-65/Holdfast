@@ -87,7 +87,13 @@ export function createHandler(
       if (req.method === 'GET' && (action === 'rpc' || action === 'cheers')) {
         if (store) {
           const c = context(store)
-          await rateLimit(c, `rpc:${c.ipKey}`, 300, 300)
+          try {
+            await rateLimit(c, `rpc:${c.ipKey}`, 300, 300)
+          } catch (err) {
+            // Over the limit: refuse. Database unreachable: read the chain anyway, so saving,
+            // locking and safe withdrawals keep working.
+            if (err instanceof ApiError) throw err
+          }
         }
         const net = cleanNet(url.searchParams.get('net'))
         if (action === 'cheers') return send(200, await fetchCheers(transport, url.searchParams.get('addr'), net, env), 'public, s-maxage=30, max-age=15')

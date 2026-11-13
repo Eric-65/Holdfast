@@ -186,3 +186,66 @@ async function run(handler: ReturnType<typeof createHandler>, url: string) {
   await handler(req, res)
   return { status, body, headers }
 }
+
+describe('review fixes', () => {
+  it('uses the default RPC servers and allows exactly the three read methods', async () => {
+    expect(rpcUrlFor('mainnet', {})).toBe('https://rpc.nimiqwatch.com')
+    expect(rpcUrlFor('testnet', {})).toBe('https://rpc.nimiq-testnet.com')
+    expect(rpcUrlFor('mainnet', { NIMIQ_RPC_URL: 'https://m.example' })).toBe('https://m.example')
+    const seen: unknown[] = []
+    const t: RpcTransport = async (url, body) => (seen.push([url, (body as any).method, (body as any).params]), { result: 1 })
+    await relay(t, { method: 'getBlockNumber', param: null, net: 'testnet' }, {})
+    await relay(t, { method: 'getTransactionByHash', param: 'AB'.repeat(32), net: 'mainnet' }, {})
+    expect(seen).toEqual([
+      ['https://rpc.nimiq-testnet.com', 'getBlockNumber', []],
+      ['https://rpc.nimiqwatch.com', 'getTransactionByHash', ['ab'.repeat(32)]],
+    ])
+    for (const [m, p] of [['getTransactionByHash', 'abc'], ['getTransactionsByAddress', newAddress()], ['sendBasicTransaction', 'x'], [null, null]] as const)
+      await expect(relay(t, { method: m, param: p, net: 'mainnet' }, {})).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('keeps answering blockchain reads when the database is down', async () => {
+    const down = { cmd: async () => { throw new Error('ECONNREFUSED') }, pipeline: async () => { throw new Error('ECONNREFUSED') } }
+    const handler = createHandler(() => down, async () => ({ result: 7 }), {})
+    const res = await run(handler, '/api/hf?a=rpc&m=getBlockNumber&net=testnet')
+    expect([res.status, JSON.parse(res.body)]).toEqual([200, { result: 7 }])
+  })
+
+  it('rejects oversized backups instead of silently trimming them', () => {
+    const me = newAddress()
+    const closed = (i: number) => goal({ id: `closed${i}xx`, status: 'archived' })
+    expect(() => cleanState({ goals: Array.from({ length: 13 }, (_, i) => closed(i)) }, me, now)).toThrow(/12 goals/)
+    expect(() => cleanState({ goals: Array.from({ length: 12 }, (_, i) => closed(i)) }, me, now)).not.toThrow()
+    const events = (n: number) => Array.from({ length: n }, () => ({ type: 'lock', luna: 1, at: now }))
+    expect(() => cleanState({ goals: [goal({ events: events(41) })] }, me, now)).toThrow(/40 events/)
+    expect(cleanState({ goals: [goal({ events: events(40) })] }, me, now).goals[0]!.events).toHaveLength(40)
+  })
+
+  it('cleans names, emoji, amounts and accounts', () => {
+    const me = newAddress()
+    const s = cleanState(
+      { goals: [goal({ name: '  Rent\u0000 ​buffer  ', emoji: '🏠🏠🏠🏠🏠' })], accounts: ['bad', newAddress(), newAddress(), newAddress(), newAddress(), me] },
+      me,
+      now,
+    )
+    expect(s.goals[0]!.name).toBe('Rent buffer')
+    expect(s.goals[0]!.emoji).toBe('🎯') // more than 4 code points is replaced
+    expect(s.accounts).toHaveLength(4)
+    expect(s.accounts[0]).toBe(me)
+    expect(() => cleanState({ goals: [goal({ name: 'x'.repeat(41) })] }, me, now)).toThrow()
+    expect(() => cleanState({ goals: [goal({ savedLuna: -1 })] }, me, now)).toThrow()
+    expect(() => cleanState({ goals: [goal(), goal()] }, me, now)).toThrow() // duplicate id
+  })
+
+  it('round-trips a backup through the API: sync, restore and the public goal', async () => {
+    const me = newAddress()
+    await syncState(ctx(), me, { state: { goals: [goal({ status: 'completed', reachedAt: now })], accounts: [me], network: 'testnet' } })
+    const restored = (await getState(ctx(), me)).state!
+    expect(restored.network).toBe('testnet')
+    expect(restored.goals[0]!.reachedAt).toBe(now)
+    const pub = await publicGoal(ctx(), me, 'abc123def')
+    expect(pub.goal.status).toBe('completed')
+    expect(pub.network).toBe('testnet')
+    expect(await publicStats(ctx())).toMatchObject({ activeGoals: 0, lockedLuna: 0 })
+  })
+})

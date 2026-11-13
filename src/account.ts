@@ -164,7 +164,10 @@ export function signOut(): void {
 function backupPayload(): Omit<SyncedState, 'updatedAt'> {
   const active = ctx.stake ? ctx.stake.balance : null
   return {
-    goals: ctx.state.goals.slice(-12).map((g) => ({
+    // At most 12 goals: the newest closed ones plus the active one, whatever its position.
+    goals: [...ctx.state.goals.filter((g) => g.status !== 'active').slice(-11), ...ctx.state.goals.filter((g) => g.status === 'active')]
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((g) => ({
       ...g,
       savedLuna: g.status === 'active' ? savedLuna(g, active) : g.lockedLuna,
       events: g.events.slice(-40),

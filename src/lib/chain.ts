@@ -63,8 +63,9 @@ async function rpc<T>(method: string, params: string[], net: Net = defaultNet): 
   const res = await fetch(`${config.apiBase}/api/hf?${q}`, { headers: { Accept: 'application/json' }, signal: timeout(10_000) })
   const json = (await res.json().catch(() => null)) as { result?: unknown; error?: unknown; message?: string } | null
   if (!json || (!('result' in json) && !('error' in json))) {
-    // A static host answers with HTML or a bare 404: there is no relay here.
-    if (!json || res.status === 404) relayOk = false
+    // A static host answers with its HTML page or a bare 404: there is no relay here. A passing
+    // gateway error (a 502/504 page) is not a reason to stop trying.
+    if (looksLikeStaticHost(res, json)) relayOk = false
     throw new Error('Blockchain relay unavailable')
   }
   if (typeof json.error === 'string') throw new Error(json.message || json.error)
@@ -73,6 +74,11 @@ async function rpc<T>(method: string, params: string[], net: Net = defaultNet): 
     throw new Error(e.data || e.message || 'RPC error')
   }
   return json.result as T
+}
+
+/** True for the answer of a host without the API: a 404, or a successful HTML/non-JSON page. */
+export function looksLikeStaticHost(res: { status: number; ok: boolean }, json: unknown): boolean {
+  return res.status === 404 || (res.ok && json === null)
 }
 
 /** Whether Holdfast can read the blockchain (directly or through its relay). */

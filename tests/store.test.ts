@@ -81,3 +81,23 @@ describe('persistence', () => {
     expect(loadState('broken').goals).toEqual([])
   })
 })
+
+describe('Goalkeeper and relay safety rules', () => {
+  it('only uses chain totals on the Goalkeeper page when the starting stake is known', async () => {
+    const { keeperBaselineKnown } = await import('../src/views/keeper')
+    expect(keeperBaselineKnown({ baselineFromChain: true, baselineLuna: 0 }, { b: 0 })).toBe(true)
+    expect(keeperBaselineKnown({ baselineFromChain: false, baselineLuna: 500 }, { b: 0 })).toBe(false)
+    expect(keeperBaselineKnown({ baselineLuna: 0 }, { b: 0 })).toBe(false) // older goal, never read
+    expect(keeperBaselineKnown({ baselineLuna: 700 }, { b: 0 })).toBe(true)
+    expect(keeperBaselineKnown(null, { b: 0 })).toBe(false) // snapshot-only link
+    expect(keeperBaselineKnown(null, { b: 900 })).toBe(true)
+  })
+
+  it('stops using the relay only on a static host, not on a passing gateway error', async () => {
+    const { looksLikeStaticHost } = await import('../src/lib/chain')
+    expect(looksLikeStaticHost({ status: 404, ok: false }, null)).toBe(true)
+    expect(looksLikeStaticHost({ status: 200, ok: true }, null)).toBe(true) // the app's HTML page
+    expect(looksLikeStaticHost({ status: 504, ok: false }, null)).toBe(false)
+    expect(looksLikeStaticHost({ status: 502, ok: false }, null)).toBe(false)
+  })
+})

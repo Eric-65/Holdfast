@@ -98,7 +98,10 @@ export function cleanGoal(raw: unknown): SyncedGoal {
     pendingUnlock = { luna: luna(p.luna, 'pendingUnlock'), step: p.step as 'inactive' | 'retired', startedAt: time(p.startedAt, 'pendingUnlock') }
   }
   const validator = g.validator === null || g.validator === undefined ? null : (normalizeAddress(g.validator) ?? bad('validator'))
-  const events = (Array.isArray(g.events) ? g.events : []).slice(-MAX_EVENTS).map(cleanEvent).filter((e): e is SyncedEvent => !!e)
+  if (g.events !== undefined && !Array.isArray(g.events)) bad('events')
+  const rawEvents = (g.events as unknown[] | undefined) ?? []
+  if (rawEvents.length > MAX_EVENTS) bad(`more than ${MAX_EVENTS} events`)
+  const events = rawEvents.map(cleanEvent).filter((e): e is SyncedEvent => !!e)
   const emoji = typeof g.emoji === 'string' && g.emoji.length <= 16 && [...g.emoji].length <= 4 && g.emoji.trim() ? g.emoji : '🎯'
   return {
     id: g.id as string,
@@ -123,7 +126,8 @@ export function cleanGoal(raw: unknown): SyncedGoal {
 export function cleanState(raw: unknown, owner: string, now: number): SyncedState {
   const s = raw as Record<string, unknown>
   if (!s || typeof s !== 'object' || !Array.isArray(s.goals)) bad('state')
-  const goals = (s.goals as unknown[]).slice(-MAX_GOALS).map(cleanGoal)
+  if ((s.goals as unknown[]).length > MAX_GOALS) bad(`more than ${MAX_GOALS} goals`)
+  const goals = (s.goals as unknown[]).map(cleanGoal)
   if (goals.filter((g) => g.status === 'active').length > 1) bad('more than one active goal')
   if (new Set(goals.map((g) => g.id)).size !== goals.length) bad('duplicate goal id')
   const others = (Array.isArray(s.accounts) ? s.accounts : [])

@@ -1,4 +1,4 @@
-import { ctx, commit, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues } from '../app'
+import { ctx, commit, readLiveStake, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues } from '../app'
 import { backupNow } from '../account'
 import { chainAvailable, readFreshFor } from '../lib/chain'
 import { formatFiat, formatNim, formatAddress, isValidAddress, parseNimInput, pct, shortAddress, timeAgo, toLuna, toNim } from '../lib/format'
@@ -634,11 +634,20 @@ function shareKeeper(goal: Goal): void {
 
 // ---------- Breaking the seal (unstake) ----------
 
+/**
+ * How much of the live active stake belongs to this goal: what it has saved (or, while its
+ * starting stake is unknown, what Holdfast locked for it), never more than is actually active.
+ */
+function goalShare(goal: Goal, liveActive: number): number {
+  const own = baselineUnknown(goal) ? goal.lockedLuna - (goal.pendingUnlock?.luna ?? 0) : savedLuna(goal, liveActive)
+  return Math.max(0, Math.min(liveActive, own))
+}
+
 async function breakSeal(goal: Goal): Promise<void> {
   // Withdrawing sets the wallet's *total* active stake. Without a fresh reading Holdfast could
   // switch off stake that has nothing to do with this goal, so it never guesses.
-  await refreshChain()
-  if (!ctx.stake) {
+  const live = await readLiveStake()
+  if (!live) {
     openSheet(
       html`<h2>Can't check your stake right now</h2>
         <p>To withdraw only this goal's NIM, Holdfast needs to read how much you have staked from the Nimiq network, and it couldn't just now.</p>
@@ -654,7 +663,7 @@ async function breakSeal(goal: Goal): Promise<void> {
   }
   goal = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
   // What this goal can give back: its share of the active stake (never other stake).
-  const max = Math.min(ctx.stake.balance, Math.max(currentSaved(goal), Math.min(goal.lockedLuna, ctx.stake.balance)))
+  const max = goalShare(goal, live.balance)
   if (max <= 0) return toast('There is no active stake on this goal to withdraw.', 'info')
   openSheet(
     html`<h2>Break the seal?</h2>
@@ -699,13 +708,19 @@ async function breakSeal(goal: Goal): Promise<void> {
 async function startUnlock(goal: Goal, luna: number): Promise<boolean> {
   const w = ctx.wallet
   if (!w) return false
-  // The transaction sets the new total of active stake, so it must start from the real total.
-  await refreshChain()
-  if (!ctx.stake) {
-    toast("Couldn't read your stake from the Nimiq network. Nothing was changed. Try again in a moment.", 'error')
+  // The transaction sets the new total of active stake, so it must start from the real total,
+  // read again right now. If that read fails, nothing is sent.
+  const live = await readLiveStake()
+  if (!live) {
+    toast("Can't check your stake right now, so nothing was sent. Your NIM is safe and still staked. Try again in a moment.", 'error')
     return false
   }
-  const newActiveBalance = Math.max(0, ctx.stake.balance - luna)
+  const latestGoal = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
+  if (luna > goalShare(latestGoal, live.balance)) {
+    toast(`Your stake changed. You can withdraw at most ${formatNim(goalShare(latestGoal, live.balance))} NIM from this goal now.`, 'error')
+    return false
+  }
+  const newActiveBalance = live.balance - luna
   try {
     const tx = await w.sendSetActiveStakeTransaction({ newActiveBalance })
     const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
