@@ -329,3 +329,26 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 .board li.board-divider + li { border-top: 1px solid var(--line); }
 .board li.board-divider:first-child { padding-top: 6px; }
 .board li.board-divider:first-child + li { border-top: 0; }
+
+/* Live usage numbers on the landing page and leaderboard. */
+.stats-strip {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 4px;
+  font-size: 0.9rem; color: var(--ink-2);
+}
+.stats-strip span { display: inline-flex; align-items: baseline; gap: 5px; }
+.stats-strip b { color: var(--ink); font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.stats-strip span + span::before { content: '·'; color: var(--muted); margin-right: 9px; }
+
+/* Cheers received, read from the blockchain. */
+.chip-muted { background: var(--line); color: var(--ink-2); }
+.cheers-card h3 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cheers-card h3 .muted { font-size: 0.9rem; font-weight: 700; }
+.cheers { list-style: none; margin: 0 0 10px; padding: 0; }
+.cheers li { display: flex; gap: 12px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.cheers li:last-child { border-bottom: 0; }
+.cheer-amt {
+  flex: 0 0 auto; min-width: 54px; text-align: center; font-weight: 800; font-size: 0.85rem;
+  padding: 4px 8px; border-radius: 99px; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--gold-2) 30%, transparent); color: color-mix(in srgb, var(--gold) 70%, var(--ink));
+}
+.cheer-msg { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }

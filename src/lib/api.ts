@@ -21,6 +21,47 @@ export interface OwnProfile extends PublicProfile {
   referralList: { name: string; address: string; joinedAt: number }[]
 }
 
+export interface PublicStats {
+  savers: number
+  activeGoals: number
+  lockedLuna: number
+}
+
+/** A goal as backed up on the server (the same fields as on the phone, plus the saved amount). */
+export interface SyncedGoal {
+  id: string
+  name: string
+  emoji: string
+  targetLuna: number
+  baselineLuna: number
+  lockedLuna: number
+  savedLuna: number
+  createdAt: number
+  status: 'active' | 'completed' | 'archived'
+  sealBrokenAt: number | null
+  reachedAt: number | null
+  pendingUnlock: { luna: number; step: 'inactive' | 'retired'; startedAt: number } | null
+  validator: string | null
+  baselineFromChain?: boolean
+  events: { type: 'created' | 'lock' | 'unlock' | 'retire' | 'release' | 'reached' | 'shared'; luna: number; at: number; tx?: string }[]
+}
+
+export interface SyncedState {
+  goals: SyncedGoal[]
+  stakerCreated: boolean
+  accounts: string[]
+  network: 'mainnet' | 'testnet'
+  updatedAt: number
+}
+
+export interface PublicGoal {
+  goal: SyncedGoal
+  owner: { name: string }
+  accounts: string[]
+  network: 'mainnet' | 'testnet'
+  updatedAt: number
+}
+
 /** code 'unavailable' means the profile service is not reachable or not set up on this deployment. */
 export class ApiFailure extends Error {
   constructor(
@@ -64,4 +105,8 @@ export const api = {
   me: (token: string) => call<{ profile: OwnProfile }>('me', { token }),
   setName: (token: string, name: string) => call<{ profile: OwnProfile }>('name', { token, body: { name } }),
   claim: (token: string, code: string) => call<{ profile: OwnProfile; inviter: string }>('claim', { token, body: { code } }),
+  stats: () => call<PublicStats>('stats'),
+  goal: (address: string, id: string) => call<PublicGoal>('goal', { query: { addr: address.replace(/\s/g, ''), id } }),
+  sync: (token: string, state: Omit<SyncedState, 'updatedAt'>) => call<{ updatedAt: number }>('sync', { token, body: { state } }),
+  state: (token: string) => call<{ state: SyncedState | null }>('state', { token }),
 }

@@ -1,6 +1,6 @@
 import './style.css'
-import { checkApi, claimPendingInvite, loadInvite, loadProfile, refreshProfile } from './account'
-import { attachWallet, ctx, onChange, refreshChain, refreshPrices } from './app'
+import { checkApi, claimPendingInvite, loadInvite, loadProfile, refreshProfile, refreshStats, restoreOrBackup, scheduleBackup } from './account'
+import { attachWallet, ctx, onChange, onCommit, refreshChain, refreshCheers, refreshPrices } from './app'
 import { captureInviteCode, wasWelcomed } from './lib/identity'
 import { decodeKeeper } from './lib/share'
 import { initTheme, syncToggle, toggleTheme } from './lib/theme'
@@ -13,6 +13,9 @@ import { openWelcomeSheet, renderBoard, renderProfile, tabBar } from './views/so
 
 const root = document.getElementById('app')!
 initTheme()
+// Every change to the goals is backed up to the profile (when signed in), so it survives a new
+// phone and the Goalkeeper's link stays live.
+onCommit(() => scheduleBackup())
 // An invite link lands as ?ref=CODE. Remember the code now; it is used when the profile is created.
 const arrivedByInvite = captureInviteCode() !== null
 
@@ -164,6 +167,7 @@ async function connect(): Promise<void> {
 /** Once the wallet is connected: restore the profile, or offer to create one (once per wallet). */
 async function startAccount(): Promise<void> {
   await Promise.all([loadProfile(), loadInvite(arrivedByInvite)])
+  void restoreOrBackup()
   // Already has a profile but no inviter yet: an invite link opened now still counts.
   const inviter = await claimPendingInvite()
   if (inviter) toast(`🎉 ${inviter} is now your inviter`, 'success')
@@ -184,6 +188,7 @@ async function boot(): Promise<void> {
   }
   if (conn === 'connecting') return connect()
   void checkApi()
+  void refreshStats()
   // Outside Nimiq Pay the landing page shows at once. If the wallet turns up late, connect then.
   const late = await connectNimiqPay(10_000)
   if (late && !ctx.wallet) void connect()
@@ -193,6 +198,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && ctx.wallet) {
     void refreshChain()
     void refreshPrices()
+    void refreshCheers()
     void refreshProfile(15_000)
   }
 })

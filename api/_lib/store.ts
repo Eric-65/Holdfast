@@ -155,6 +155,21 @@ export class MemoryStore implements Store {
         const e = this.get(key)
         return e?.t === 'hash' ? [...e.v.entries()].flat() : []
       }
+      case 'HDEL': {
+        const e = this.get(key)
+        if (e?.t !== 'hash') return 0
+        let removed = 0
+        for (const f of a.slice(2)) if (e.v.delete(f)) removed++
+        return removed
+      }
+      case 'HVALS': {
+        const e = this.get(key)
+        return e?.t === 'hash' ? [...e.v.values()] : []
+      }
+      case 'HLEN': {
+        const e = this.get(key)
+        return e?.t === 'hash' ? e.v.size : 0
+      }
       case 'HINCRBY': {
         const e = this.ensure(key, 'hash')
         const n = Number(e.v.get(a[2]!) ?? 0) + Number(a[3])

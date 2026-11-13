@@ -10,9 +10,11 @@ import {
   recordUnlockStart,
   saveState,
   savedLuna,
+  withChainBaseline,
 } from '../src/lib/store'
 
-const mk = () => createGoal({ name: '  Rent buffer ', emoji: '🏠', targetLuna: 1_000_00000, baselineLuna: 50_00000, validator: null, now: 1 })
+const mk = () =>
+  createGoal({ name: '  Rent buffer ', emoji: '🏠', targetLuna: 1_000_00000, baselineLuna: 50_00000, baselineFromChain: true, validator: null, now: 1 })
 
 describe('goal lifecycle', () => {
   it('creates an active goal with trimmed name', () => {
@@ -43,6 +45,30 @@ describe('goal lifecycle', () => {
     expect(g.pendingUnlock).toBeNull()
     expect(g.lockedLuna).toBe(200_00000)
     expect(g.events.map((e) => e.type)).toEqual(['created', 'lock', 'unlock', 'retire', 'release'])
+  })
+})
+
+describe('starting stake not known when the goal was made', () => {
+  const unknown = () => createGoal({ name: 'Laptop', emoji: '💻', targetLuna: 500_00000, baselineLuna: 0, validator: null, now: 1 })
+
+  it('uses the ledger until the starting stake is read from the chain', () => {
+    // 1,000 NIM was already staked before the goal; it must not count toward it.
+    const g = recordLock(unknown(), 50_00000, 'tx1', 10)
+    expect(savedLuna(g, 1_050_00000)).toBe(50_00000)
+    const fixed = withChainBaseline(g, 1_050_00000, 10 + 5 * 60_000)
+    expect(fixed.baselineLuna).toBe(1_000_00000)
+    expect(fixed.baselineFromChain).toBe(true)
+    expect(savedLuna(fixed, 1_052_00000)).toBe(52_00000) // rewards count from now on
+  })
+
+  it('waits for a settled reading right after a lock, and leaves known baselines alone', () => {
+    const g = recordLock(unknown(), 50_00000, 'tx1', 10)
+    expect(withChainBaseline(g, 1_000_00000, 10 + 60_000)).toBe(g) // lock may not be on chain yet
+    const known = mk()
+    expect(withChainBaseline(known, 9_999_00000)).toBe(known)
+    // Older goals saved before this field existed, with a zero baseline, are treated as unknown.
+    const legacy = { ...unknown(), baselineFromChain: undefined }
+    expect(withChainBaseline(legacy, 30_00000, 99).baselineLuna).toBe(30_00000)
   })
 })
 

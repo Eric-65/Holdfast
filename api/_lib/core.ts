@@ -56,11 +56,11 @@ const CLICK_TTL_S = 30 * 60
 const CLAIM_WINDOW_MS = 7 * 24 * 3600 * 1000
 const AMBIGUOUS = '*'
 
-const userKey = (address: string) => `u:${address.replace(/\s/g, '')}`
+export const userKey = (address: string) => `u:${address.replace(/\s/g, '')}`
 export const shortAddress = (address: string) => `${address.slice(0, 9)}…${address.slice(-4)}`
-const defaultName = (address: string) => `Saver ${address.replace(/\s/g, '').slice(-4)}`
+export const defaultName = (address: string) => `Saver ${address.replace(/\s/g, '').slice(-4)}`
 
-async function rateLimit(ctx: RequestContext, bucket: string, limit: number, windowS: number): Promise<void> {
+export async function rateLimit(ctx: RequestContext, bucket: string, limit: number, windowS: number): Promise<void> {
   const key = `rl:${bucket}:${Math.floor(ctx.now / (windowS * 1000))}`
   const [count] = await ctx.store.pipeline([
     ['INCR', key],

@@ -1,9 +1,11 @@
-import { getStakeTotals, fetchValidators, chainAvailable, type StakerInfo, type Validator } from './lib/chain'
+import { getStakeTotals, fetchCheers, fetchValidators, chainAvailable, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
 import { getPrices, type PriceState } from './lib/prices'
-import { loadState, saveState, type StoreState } from './lib/store'
-import { hostFiat, type Wallet } from './lib/wallet'
+import { activeGoal, baselineUnknown, loadState, replaceGoal, saveState, withChainBaseline, type StoreState } from './lib/store'
+import { hostFiat, hostNetwork, type Wallet } from './lib/wallet'
 import { toNim } from './lib/format'
-import type { OwnProfile } from './lib/api'
+import type { OwnProfile, PublicStats } from './lib/api'
+
+setChainNetwork(hostNetwork())
 
 /**
  * unknown: not checked yet. unavailable: this deployment has no profile service.
@@ -31,6 +33,12 @@ export interface AppCtx {
   invite: { code: string; name: string } | null
   /** The "X invited you" message shows until this time (ms), then clears. 0 = not showing. */
   inviteBannerUntil: number
+  /** Cheers this wallet has received on-chain (newest first). null = not loaded or unreadable. */
+  cheers: Cheer[] | null
+  /** Public usage numbers. null until loaded. */
+  stats: PublicStats | null
+  /** When the goals were last backed up to the profile (ms), 0 = not yet on this visit. */
+  syncedAt: number
 }
 
 export const ctx: AppCtx = {
@@ -48,6 +56,9 @@ export const ctx: AppCtx = {
   profileStatus: 'unknown',
   invite: null,
   inviteBannerUntil: 0,
+  cheers: null,
+  stats: null,
+  syncedAt: 0,
   fiats: (() => {
     const base = ['usdt', 'ngn']
     const h = hostFiat()
@@ -61,10 +72,17 @@ const listeners = new Set<Listener>()
 export const onChange = (l: Listener) => listeners.add(l)
 export const emit = (force = false) => listeners.forEach((l) => l(force))
 
-export function commit(state: StoreState): void {
-  ctx.state = state
-  if (ctx.address) saveState(ctx.address, state)
-  emit(true)
+/** Called after every saved change to the goals (used to back them up to the profile). */
+type CommitListener = () => void
+const commitListeners = new Set<CommitListener>()
+export const onCommit = (l: CommitListener) => commitListeners.add(l)
+
+export function commit(state: StoreState, opts: { quiet?: boolean } = {}): void {
+  ctx.state = { ...state, updatedAt: Date.now() }
+  if (ctx.address) saveState(ctx.address, ctx.state)
+  commitListeners.forEach((l) => l())
+  // quiet: a background correction, so don't interrupt someone typing.
+  emit(!opts.quiet)
 }
 
 export async function attachWallet(wallet: Wallet): Promise<void> {
@@ -75,6 +93,7 @@ export async function attachWallet(wallet: Wallet): Promise<void> {
   ctx.accounts = accounts
   ctx.address = accounts[0]
   ctx.state = loadState(ctx.address)
+  ctx.cheers = null
   wallet.onAccountsChanged((next) => {
     ctx.accounts = next
     // Nimiq Pay replaced the balance address; the old reading no longer applies.
@@ -88,7 +107,28 @@ export async function attachWallet(wallet: Wallet): Promise<void> {
 /** Staked amounts from the blockchain (only when an RPC endpoint is configured). */
 export async function refreshChain(): Promise<void> {
   if (!ctx.wallet || !ctx.accounts.length || !chainAvailable()) return
-  ctx.stake = await getStakeTotals(ctx.accounts)
+  // Keep the last good reading if the network doesn't answer this time.
+  const stake = await getStakeTotals(ctx.accounts)
+  if (stake) ctx.stake = stake
+  const goal = activeGoal(ctx.state)
+  if (ctx.stake && goal && baselineUnknown(goal)) {
+    const fixed = withChainBaseline(goal, ctx.stake.balance)
+    if (fixed !== goal) return commit(replaceGoal(ctx.state, fixed), { quiet: true })
+  }
+  emit()
+}
+
+const CHEERS_FRESH_MS = 60_000
+let cheersFetchedAt = 0
+/** Cheers received by this wallet, at most once a minute unless `force`. */
+export async function refreshCheers(force = false): Promise<void> {
+  const address = ctx.address
+  if (!address || (!force && Date.now() - cheersFetchedAt < CHEERS_FRESH_MS)) return
+  cheersFetchedAt = Date.now()
+  const cheers = await fetchCheers(address)
+  if (address !== ctx.address) return
+  if (cheers === null && ctx.cheers !== null) return // keep what we have on a temporary failure
+  ctx.cheers = cheers
   emit()
 }
 

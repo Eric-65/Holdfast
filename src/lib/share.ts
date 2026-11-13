@@ -25,6 +25,12 @@ export interface KeeperPayload {
   x?: number
   /** saver display name (optional) */
   w?: string
+  /** goal id: lets the page load the latest progress from the saver's backed-up goal */
+  g?: string
+  /** the saver's other Nimiq Pay addresses (compact); their stake counts too */
+  as?: string[]
+  /** 1 when the saver's wallet runs on testnet */
+  nt?: 1
 }
 
 function toBase64Url(str: string): string {
@@ -64,6 +70,11 @@ export function decodeKeeper(s: string): KeeperPayload | null {
       st: p.st,
       ...(p.x ? { x: p.x } : {}),
       ...(typeof p.w === 'string' && p.w ? { w: p.w.slice(0, 24) } : {}),
+      ...(typeof p.g === 'string' && /^[A-Za-z0-9]{6,32}$/.test(p.g) ? { g: p.g } : {}),
+      ...(Array.isArray(p.as)
+        ? { as: p.as.filter((a): a is string => typeof a === 'string' && /^NQ\d{2}[0-9A-Z]{32}$/i.test(a.replace(/\s/g, ''))).slice(0, 4) }
+        : {}),
+      ...(p.nt === 1 ? { nt: 1 as const } : {}),
     }
   } catch {
     return null

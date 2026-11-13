@@ -45,7 +45,14 @@ function wrap(p: NimiqProvider): Wallet {
     sendSetActiveStakeTransaction: (tx) => p.sendSetActiveStakeTransaction(tx),
     sendRetireStakeTransaction: (tx) => p.sendRetireStakeTransaction(tx),
     sendRemoveStakeTransaction: (tx) => p.sendRemoveStakeTransaction(tx),
-    onAccountsChanged: (cb) => void p.on('accountsChanged', cb),
+    onAccountsChanged: (cb) => {
+      // Not every Nimiq Pay version announces account changes; connecting must work regardless.
+      try {
+        p.on('accountsChanged', cb)
+      } catch {
+        /* not supported */
+      }
+    },
   }
 }
 

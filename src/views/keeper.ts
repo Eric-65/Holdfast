@@ -1,19 +1,15 @@
-import { ctx } from '../app'
-import { chainAvailable, getStaker, type StakerInfo } from '../lib/chain'
-import { formatAddress, formatFiat, formatNim, parseNimInput, pct, shortAddress, timeAgo, toNim } from '../lib/format'
-import { nimiqPaymentUri, type KeeperPayload } from '../lib/share'
+import { ctx, emit, fiatValues } from '../app'
+import { api, type PublicGoal } from '../lib/api'
+import { chainAvailable, fetchCheers, getStakeTotals, readFreshFor, type Cheer, type Net, type StakerInfo } from '../lib/chain'
+import { formatAddress, formatFiat, formatNim, LUNA_PER_NIM, parseNimInput, pct, shortAddress, timeAgo, toNim } from '../lib/format'
+import { encodeKeeper, nimiqPaymentUri, type KeeperPayload } from '../lib/share'
 import { connectNimiqPay, errorMessage, insideNimiqPay, isUserRejection, type Wallet } from '../lib/wallet'
-import { fiatValues } from '../app'
 import { $, $$, busy, copyText, html, ring, toast } from '../ui'
 import { fiatRow, header, nim } from './common'
+import { eventRow } from './saver'
 
 const CHEERS_KEY = 'holdfast.cheers.v1'
 const MAX_DATA_BYTES = 64
-
-interface KeeperLive {
-  stake: StakerInfo | null
-  loading: boolean
-}
 
 function cheersSent(addr: string): number {
   try {
@@ -43,50 +39,131 @@ export function cheerData(message: string): string {
   return prefix + msg
 }
 
+/**
+ * What the Goalkeeper page knows beyond the link itself. Kept between redraws so the page does not
+ * fetch again every time it redraws (prices, theme...).
+ */
+interface KeeperData {
+  key: string
+  /** The saver's backed-up goal. undefined while loading, null if there is none. */
+  server: PublicGoal | null | undefined
+  stake: StakerInfo | null
+  stakeLoading: boolean
+  cheers: Cheer[] | null
+  loadedAt: number
+}
+let data: KeeperData | null = null
+const REFRESH_MS = 30_000
+
+function load(p: KeeperPayload, key: string): void {
+  const net: Net = p.nt ? 'testnet' : 'mainnet'
+  const mine: KeeperData = { key, server: p.g ? undefined : null, stake: null, stakeLoading: chainAvailable(), cheers: data?.key === key ? data.cheers : null, loadedAt: Date.now() }
+  if (data?.key === key) Object.assign(mine, { server: data.server ?? mine.server, stake: data.stake })
+  data = mine
+  const current = () => data === mine
+
+  const readStake = (accounts: string[]) => {
+    if (!chainAvailable()) return
+    void getStakeTotals(accounts, net).then((stake) => {
+      if (!current()) return
+      mine.stake = stake ?? mine.stake
+      mine.stakeLoading = false
+      emit()
+    })
+  }
+  const fallbackAccounts = [p.a, ...(p.as ?? [])]
+  if (p.g && ctx.apiAvailable !== false) {
+    api
+      .goal(p.a, p.g)
+      .then((r) => {
+        if (!current()) return
+        mine.server = r
+        readStake(r.accounts)
+      })
+      .catch(() => {
+        if (!current()) return
+        mine.server = null
+        readStake(fallbackAccounts)
+      })
+      .finally(() => current() && emit())
+  } else {
+    mine.server = null
+    readStake(fallbackAccounts)
+  }
+  void fetchCheers(p.a, net).then((cheers) => {
+    if (!current()) return
+    if (cheers) mine.cheers = cheers
+    emit()
+  })
+}
+
 export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
-  const live: KeeperLive = { stake: null, loading: chainAvailable() }
+  const key = encodeKeeper(p)
+  if (!data || data.key !== key || Date.now() - data.loadedAt > REFRESH_MS) load(p, key)
+  const d = data!
   let friendWallet: Wallet | null = ctx.wallet
 
-  const draw = () => {
-    const onChain = live.stake !== null
-    const saved = onChain ? Math.max(0, live.stake!.balance - p.b) : p.s
-    const leaving = onChain ? live.stake!.inactiveBalance + live.stake!.retiredBalance : 0
-    const broken = !!p.x || leaving > 0 || (onChain && saved < p.s)
-    const reached = saved >= p.t
-    const percent = pct(saved, p.t)
-    const sent = cheersSent(p.a)
-    root.innerHTML = html`${header(html`<span class="badge">Goalkeeper</span>`)}
+  const g = d.server?.goal ?? null
+  const name = g?.name ?? p.n
+  const emoji = g?.emoji ?? p.e
+  const target = g?.targetLuna ?? p.t
+  const baseline = g ? g.baselineLuna : p.b
+  const createdAt = g?.createdAt ?? p.c
+  // On-chain stake only counts once the saver's starting stake is known.
+  const chainOk = d.stake !== null && !(g && g.baselineFromChain === false)
+  const snapshot = g ? g.savedLuna : p.s
+  const saved = chainOk ? Math.max(0, d.stake!.balance - baseline) : snapshot
+  const leaving = d.stake ? d.stake.inactiveBalance + d.stake.retiredBalance : (g?.pendingUnlock?.luna ?? 0)
+  const sealBrokenAt = g?.sealBrokenAt ?? p.x ?? null
+  // Stake that disappeared since the last update, without a withdrawal through Holdfast.
+  const dropped = chainOk && snapshot - saved > Math.max(LUNA_PER_NIM, snapshot * 0.02)
+  const reached = !!g?.reachedAt || saved >= target
+  const closed = !!g && g.status !== 'active' && !reached
+  const broken = !reached && (!!sealBrokenAt || leaving > 0 || dropped)
+  const percent = pct(saved, target)
+  const sent = cheersSent(p.a)
+  const owner = d.server?.owner.name ?? p.w ?? null
+  const cheers = (d.cheers ?? []).filter((c) => c.at >= createdAt)
+  const cheersLuna = cheers.reduce((a, c) => a + c.luna, 0)
+  const source = d.stakeLoading && d.stake === null
+    ? 'Checking the blockchain…'
+    : chainOk
+      ? 'Live from the Nimiq blockchain'
+      : d.server
+        ? `Updated ${timeAgo(d.server.updatedAt)}`
+        : d.server === undefined
+          ? 'Loading the latest progress…'
+          : `Snapshot shared ${timeAgo(p.st)}`
+
+  root.innerHTML = html`${header(html`<span class="badge">Goalkeeper</span>`)}
     <main class="page keeper">
-      <p class="eyebrow">You're the Goalkeeper for</p>
+      <p class="eyebrow">${owner ? html`You're <b>${owner}</b>'s Goalkeeper` : "You're the Goalkeeper for"}</p>
       <section class="goal-hero ${broken ? 'broken' : ''} ${reached ? 'reached' : ''}">
         <div class="ring-wrap">
           ${ring(percent)}
-          <div class="ring-center"><div class="goal-emoji">${p.e}</div><div class="ring-pct">${Math.floor(percent)}%</div></div>
+          <div class="ring-center"><div class="goal-emoji">${emoji}</div><div class="ring-pct">${Math.floor(percent)}%</div></div>
         </div>
-        <h1 class="goal-name">${p.n}</h1>
-        <div class="big-amount">${nim(saved)} <span class="muted">of ${formatNim(p.t)}</span></div>
+        <h1 class="goal-name">${name}</h1>
+        <div class="big-amount">${nim(saved)} <span class="muted">of ${formatNim(target)}</span></div>
         ${fiatRow(saved)}
         <div class="status-line">
           ${
             reached
               ? html`<span class="chip chip-good">🎉 Goal reached</span>`
               : broken
-                ? html`<span class="chip chip-bad">⚠️ Seal broken${p.x ? ` ${timeAgo(p.x)}` : ''}</span>`
-                : html`<span class="chip chip-lock">🔒 Still sealed</span>`
+                ? html`<span class="chip chip-bad">⚠️ Seal broken${sealBrokenAt ? ` ${timeAgo(sealBrokenAt)}` : ''}</span>`
+                : closed
+                  ? html`<span class="chip chip-muted">Goal closed</span>`
+                  : html`<span class="chip chip-lock">🔒 Still sealed</span>`
           }
+          ${cheersLuna > 0 ? html`<span class="chip chip-gold">🎉 ${formatNim(cheersLuna)} NIM cheered</span>` : ''}
         </div>
         ${
           leaving > 0
             ? html`<p class="alert">${formatNim(leaving)} NIM is being withdrawn from staking right now. Maybe check in with your friend?</p>`
             : ''
         }
-        <p class="muted small">${
-          live.loading
-            ? 'Checking the blockchain…'
-            : onChain
-              ? 'Live from the Nimiq blockchain'
-              : `Snapshot shared ${timeAgo(p.st)}`
-        } · Saving since ${new Date(p.c).toLocaleDateString()}</p>
+        <p class="muted small">${source} · Saving since ${new Date(createdAt).toLocaleDateString()}</p>
       </section>
 
       <section class="card">
@@ -102,6 +179,28 @@ export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
         ${sent > 0 ? html`<p class="muted small">You've cheered ${formatNim(sent)} NIM so far. 💛</p>` : ''}
       </section>
 
+      ${
+        cheers.length
+          ? html`<section class="card cheers-card">
+              <h3>Cheer wall</h3>
+              <ul class="cheers">${cheers.slice(0, 8).map(
+                (c) => html`<li><span class="cheer-amt">+${formatNim(c.luna)}</span><span class="cheer-msg">${c.message || '💪'}
+                  <span class="muted small">${c.from} · ${timeAgo(c.at)}</span></span></li>`,
+              )}</ul>
+              <p class="muted small">Read from the public Nimiq blockchain.</p>
+            </section>`
+          : ''
+      }
+
+      ${
+        g && g.events.some((e) => e.type !== 'shared')
+          ? html`<section class="card">
+              <h3>Recent activity</h3>
+              <ul class="timeline">${g.events.filter((e) => e.type !== 'shared').slice(-6).reverse().map(eventRow)}</ul>
+            </section>`
+          : ''
+      }
+
       <section class="card">
         <h3>How this works</h3>
         <p class="muted small">Your friend saves by <b>staking</b> NIM from their own wallet with Holdfast. You can see the stake on
@@ -111,53 +210,49 @@ export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
       <p class="center"><a class="btn btn-link" href="#/">Start your own goal with Holdfast →</a></p>
     </main>`.html
 
-    const form = $<HTMLFormElement>('#cheer-form', root)!
-    const amt = form.elements.namedItem('amount') as HTMLInputElement
-    const hint = $('#cheer-hint', root)!
-    const upd = () => {
-      const l = parseNimInput(amt.value)
-      hint.textContent = l ? fiatValues(l).map((v) => formatFiat(v.value, v.currency)).join(' · ') || ' ' : ' '
-    }
-    amt.addEventListener('input', upd)
-    $$<HTMLButtonElement>('.chip-btn', form).forEach((b) =>
-      b.addEventListener('click', () => {
-        amt.value = b.dataset.amt!
-        upd()
-      }),
-    )
-    form.addEventListener('submit', (e) => {
-      e.preventDefault()
-      const luna = parseNimInput(amt.value)
-      if (!luna) return toast('Pick an amount', 'error')
-      const message = (form.elements.namedItem('message') as HTMLInputElement).value
-      const btn = $<HTMLButtonElement>('button[type=submit]', form)
-      void busy(btn, 'Opening wallet…', async () => {
-        if (!friendWallet && insideNimiqPay()) friendWallet = await connectNimiqPay(8000)
-        if (!friendWallet) {
-          location.href = nimiqPaymentUri(p.a, toNim(luna), cheerData(message))
-          return
-        }
-        try {
-          await friendWallet.sendBasicTransactionWithData({ recipient: formatAddress(p.a), value: luna, data: cheerData(message) })
-          addCheer(p.a, luna)
-          toast('Cheer sent! 🎉', 'success')
-          draw()
-        } catch (err) {
-          toast(isUserRejection(err) ? 'Cancelled' : `Could not send: ${errorMessage(err)}`, isUserRejection(err) ? 'info' : 'error')
-        }
-      })
-    })
-    $('#copy-addr', root)!.addEventListener('click', async () => {
-      if (await copyText(formatAddress(p.a))) toast('Address copied', 'success')
-    })
+  const form = $<HTMLFormElement>('#cheer-form', root)!
+  const amt = form.elements.namedItem('amount') as HTMLInputElement
+  const hint = $('#cheer-hint', root)!
+  const upd = () => {
+    const l = parseNimInput(amt.value)
+    hint.textContent = l ? fiatValues(l).map((v) => formatFiat(v.value, v.currency)).join(' · ') || ' ' : ' '
   }
-
-  draw()
-  if (chainAvailable()) {
-    void getStaker(p.a).then((s) => {
-      live.stake = s
-      live.loading = false
-      draw()
+  amt.addEventListener('input', upd)
+  $$<HTMLButtonElement>('.chip-btn', form).forEach((b) =>
+    b.addEventListener('click', () => {
+      amt.value = b.dataset.amt!
+      upd()
+    }),
+  )
+  form.addEventListener('submit', (e) => {
+    e.preventDefault()
+    const luna = parseNimInput(amt.value)
+    if (!luna) return toast('Pick an amount', 'error')
+    const message = (form.elements.namedItem('message') as HTMLInputElement).value
+    const btn = $<HTMLButtonElement>('button[type=submit]', form)
+    void busy(btn, 'Opening wallet…', async () => {
+      if (!friendWallet && insideNimiqPay()) friendWallet = await connectNimiqPay(8000)
+      if (!friendWallet) {
+        location.href = nimiqPaymentUri(p.a, toNim(luna), cheerData(message))
+        return
+      }
+      try {
+        await friendWallet.sendBasicTransactionWithData({ recipient: formatAddress(p.a), value: luna, data: cheerData(message) })
+        addCheer(p.a, luna)
+        toast('Cheer sent! 🎉', 'success')
+        emit(true)
+        // Show it on the cheer wall once the network has it (a block takes about a second).
+        readFreshFor(60_000)
+        window.setTimeout(() => {
+          if (data) data.loadedAt = 0
+          emit(true)
+        }, 5000)
+      } catch (err) {
+        toast(isUserRejection(err) ? 'Cancelled' : `Could not send: ${errorMessage(err)}`, isUserRejection(err) ? 'info' : 'error')
+      }
     })
-  }
+  })
+  $('#copy-addr', root)!.addEventListener('click', async () => {
+    if (await copyText(formatAddress(p.a))) toast('Address copied', 'success')
+  })
 }

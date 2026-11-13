@@ -1,5 +1,5 @@
 import { ctx, emit } from '../app'
-import { claimInvite, rename, signIn, signOut } from '../account'
+import { claimInvite, refreshStats, rename, signIn, signOut } from '../account'
 import { api, ApiFailure, type LeaderboardRow } from '../lib/api'
 import { inviteUrl, nimiqPayDeepLink, miniAppTarget } from '../lib/deeplink'
 import { timeAgo } from '../lib/format'
@@ -7,6 +7,7 @@ import { clearInviteCode, markWelcomed, parseInviteInput, pendingInviteCode, set
 import { errorMessage, isUserRejection } from '../lib/wallet'
 import { $, busy, copyText, html, openSheet, raw, toast, type Raw } from '../ui'
 import { header } from './common'
+import { statsStrip } from './saver'
 
 /** Profile, invite link, referrals and the public leaderboard. */
 
@@ -283,6 +284,7 @@ const MEDALS = ['🥇', '🥈', '🥉']
 
 export function renderBoard(root: HTMLElement): void {
   if (!board || Date.now() - board.loadedAt > 15_000) void loadBoard()
+  void refreshStats()
   const me = ctx.profile
   const inTop = !!me && !!board?.rows.some((r) => r.code === me.code)
   root.innerHTML = html`${header()}
@@ -290,6 +292,7 @@ export function renderBoard(root: HTMLElement): void {
     <section class="hero small">
       <h1>🏆 Leaderboard</h1>
       <p class="lead">Savers who brought the most friends to Holdfast.</p>
+      ${statsStrip()}
     </section>
     ${
       !board

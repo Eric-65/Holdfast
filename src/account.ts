@@ -1,7 +1,9 @@
-import { ctx, emit } from './app'
-import { api, ApiFailure, type OwnProfile } from './lib/api'
+import { commit, ctx, emit } from './app'
+import { api, ApiFailure, type OwnProfile, type SyncedState } from './lib/api'
 import { browserId, clearInviteCode, pendingInviteCode, sessionToken, setSessionToken } from './lib/identity'
-import { deviceIdentifier } from './lib/wallet'
+import { savedLuna } from './lib/store'
+import { deviceIdentifier, hostNetwork } from './lib/wallet'
+import { toast } from './ui'
 
 /** Profiles, sign-in and invites. The wallet address is the account; signing a message proves it. */
 
@@ -140,6 +142,7 @@ export async function signIn(): Promise<SignInResult> {
   ctx.invite = null
   profileLoadedAt = Date.now()
   setProfile(result.profile, 'ready')
+  void restoreOrBackup()
   return result
 }
 
@@ -153,4 +156,86 @@ export async function rename(name: string): Promise<void> {
 export function signOut(): void {
   if (ctx.address) setSessionToken(ctx.address, null)
   setProfile(null, 'signed_out')
+}
+
+// ---------- Goal backup ----------
+
+/** What the server keeps: the goals, plus the amount saved so a Goalkeeper sees it without the chain. */
+function backupPayload(): Omit<SyncedState, 'updatedAt'> {
+  const active = ctx.stake ? ctx.stake.balance : null
+  return {
+    goals: ctx.state.goals.slice(-12).map((g) => ({
+      ...g,
+      savedLuna: g.status === 'active' ? savedLuna(g, active) : g.lockedLuna,
+      events: g.events.slice(-40),
+    })),
+    stakerCreated: ctx.state.stakerCreated,
+    accounts: ctx.accounts,
+    network: hostNetwork(),
+  }
+}
+
+/** Copy the goals to the profile now. Returns true when the server has the latest version. */
+export async function backupNow(): Promise<boolean> {
+  const address = ctx.address
+  const token = address ? sessionToken(address) : null
+  if (!address || !token || ctx.profileStatus !== 'ready') return false
+  try {
+    await api.sync(token, backupPayload())
+    ctx.syncedAt = Date.now()
+    emit()
+    return true
+  } catch (err) {
+    if (err instanceof ApiFailure && err.code === 'signed_out' && address === ctx.address) {
+      setSessionToken(address, null)
+      setProfile(null, 'signed_out')
+    }
+    return false
+  }
+}
+
+let backupTimer: number | undefined
+/** Back up shortly after a change; several quick changes become one request. */
+export function scheduleBackup(delayMs = 1500): void {
+  if (ctx.profileStatus !== 'ready') return
+  window.clearTimeout(backupTimer)
+  backupTimer = window.setTimeout(() => void backupNow(), delayMs)
+}
+
+/**
+ * After signing in: a phone with no goals (new phone, or the app's data was cleared) gets them
+ * back from the profile. Otherwise this phone's goals are backed up.
+ */
+export async function restoreOrBackup(): Promise<void> {
+  const address = ctx.address
+  const token = address ? sessionToken(address) : null
+  if (!address || !token || ctx.profileStatus !== 'ready') return
+  if (!ctx.state.goals.length) {
+    try {
+      const { state } = await api.state(token)
+      if (address === ctx.address && state?.goals.length && !ctx.state.goals.length) {
+        commit({ version: 1, goals: state.goals, stakerCreated: state.stakerCreated })
+        toast('Welcome back. Your goal was restored from your profile.', 'success')
+        return
+      }
+    } catch {
+      /* nothing to restore, or offline: the phone's own data stays as it is */
+    }
+  }
+  await backupNow()
+}
+
+// ---------- Public numbers ----------
+
+let statsLoadedAt = 0
+/** Savers, active goals and NIM locked across Holdfast, refreshed at most once a minute. */
+export async function refreshStats(): Promise<void> {
+  if (Date.now() - statsLoadedAt < 60_000) return
+  statsLoadedAt = Date.now()
+  try {
+    ctx.stats = await api.stats()
+    emit()
+  } catch {
+    /* the numbers are optional */
+  }
 }

@@ -1,15 +1,19 @@
 import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { ApiError, authenticate, claimInvite, createChallenge, inviteInfo, leaderboard, login, ownProfile, setName, type RequestContext } from './_lib/core.js'
+import { cleanNet, fetchCheers, httpTransport, relay, type RpcTransport } from './_lib/chain.js'
+import { ApiError, authenticate, claimInvite, createChallenge, inviteInfo, leaderboard, login, ownProfile, rateLimit, setName, type RequestContext } from './_lib/core.js'
+import { getState, publicGoal, publicStats, syncState } from './_lib/goals.js'
 import { storeFromEnv, type Store } from './_lib/store.js'
 
 /**
  * Holdfast API: one serverless function, routed by ?a=<action>.
- *   GET  leaderboard | invite&code=X | me (signed in)
- *   POST challenge | login | name (signed in) | claim (signed in)
+ *   GET  leaderboard | invite&code=X | stats | goal&addr=X&id=Y | me (signed in) | state (signed in)
+ *        rpc&m=METHOD&p=PARAM&net=mainnet|testnet | cheers&addr=X&net=...  (read-only blockchain, no database needed)
+ *   POST challenge | login | name (signed in) | claim (signed in) | sync (signed in)
  */
 type Req = IncomingMessage & { body?: unknown }
-const MAX_BODY = 8 * 1024
+/** Goal backups are the largest requests: up to a dozen goals with their recent activity. */
+const MAX_BODY = 64 * 1024
 
 async function readJson(req: Req): Promise<Record<string, unknown>> {
   let raw: unknown = req.body
@@ -52,7 +56,11 @@ export function networkOf(ip: string): string {
   return full.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':')
 }
 
-export function createHandler(getStore: () => Store | null) {
+export function createHandler(
+  getStore: () => Store | null,
+  transport: RpcTransport = httpTransport,
+  env: Record<string, string | undefined> = process.env,
+) {
   return async function handler(req: Req, res: ServerResponse): Promise<void> {
     const send = (status: number, body: unknown, cache = 'no-store') => {
       res.statusCode = status
@@ -61,31 +69,50 @@ export function createHandler(getStore: () => Store | null) {
       res.end(JSON.stringify(body))
     }
     try {
-      const store = getStore()
-      if (!store) throw new ApiError(503, 'not_configured', 'Profiles are not set up on this deployment yet.')
       const url = new URL(req.url ?? '/', 'http://localhost')
       const action = url.searchParams.get('a') ?? ''
       const ip = (header(req, 'x-forwarded-for') ?? req.socket?.remoteAddress ?? 'unknown').split(',')[0]!.trim()
       const country = header(req, 'x-vercel-ip-country')
-      const ctx: RequestContext = {
-        store,
+      const store = getStore()
+      const context = (s: Store): RequestContext => ({
+        store: s,
         now: Date.now(),
         country: country && /^[A-Z]{2}$/.test(country) ? country : null,
         ipKey: createHash('sha256').update(ip).digest('hex').slice(0, 24),
         netKey: createHash('sha256').update(`net:${networkOf(ip)}`).digest('hex').slice(0, 24),
-        requireUniqueDevice: process.env.HF_REQUIRE_UNIQUE_DEVICE === '1',
+        requireUniqueDevice: env.HF_REQUIRE_UNIQUE_DEVICE === '1',
+      })
+
+      // Blockchain reads work even without the profile database.
+      if (req.method === 'GET' && (action === 'rpc' || action === 'cheers')) {
+        if (store) {
+          const c = context(store)
+          await rateLimit(c, `rpc:${c.ipKey}`, 300, 300)
+        }
+        const net = cleanNet(url.searchParams.get('net'))
+        if (action === 'cheers') return send(200, await fetchCheers(transport, url.searchParams.get('addr'), net, env), 'public, s-maxage=30, max-age=15')
+        const r = await relay(transport, { method: url.searchParams.get('m'), param: url.searchParams.get('p'), net }, env)
+        return send(200, r.body, `public, s-maxage=${r.cacheS}, max-age=${Math.min(5, r.cacheS)}`)
       }
+
+      if (!store) throw new ApiError(503, 'not_configured', 'Profiles are not set up on this deployment yet.')
+      const ctx = context(store)
+      const signedIn = () => authenticate(ctx, header(req, 'authorization'))
 
       if (req.method === 'GET') {
         if (action === 'leaderboard') return send(200, await leaderboard(ctx), 'public, s-maxage=10, max-age=5')
+        if (action === 'stats') return send(200, await publicStats(ctx), 'public, s-maxage=30, max-age=15')
         if (action === 'invite') return send(200, await inviteInfo(ctx, url.searchParams.get('code')))
-        if (action === 'me') return send(200, { profile: await ownProfile(ctx, await authenticate(ctx, header(req, 'authorization'))) })
+        if (action === 'goal') return send(200, await publicGoal(ctx, url.searchParams.get('addr'), url.searchParams.get('id')), 'public, s-maxage=5, max-age=5')
+        if (action === 'me') return send(200, { profile: await ownProfile(ctx, await signedIn()) })
+        if (action === 'state') return send(200, await getState(ctx, await signedIn()))
       } else if (req.method === 'POST') {
         const body = await readJson(req)
         if (action === 'challenge') return send(200, await createChallenge(ctx, body))
         if (action === 'login') return send(200, await login(ctx, body))
-        if (action === 'name') return send(200, { profile: await setName(ctx, await authenticate(ctx, header(req, 'authorization')), body) })
-        if (action === 'claim') return send(200, await claimInvite(ctx, await authenticate(ctx, header(req, 'authorization')), body))
+        if (action === 'name') return send(200, { profile: await setName(ctx, await signedIn(), body) })
+        if (action === 'claim') return send(200, await claimInvite(ctx, await signedIn(), body))
+        if (action === 'sync') return send(200, await syncState(ctx, await signedIn(), body))
       }
       throw new ApiError(404, 'not_found', 'Unknown request.')
     } catch (err) {

@@ -22,6 +22,11 @@ export interface Goal {
   createdAt: number
   /** Stake the user already had before this goal; not counted toward it. */
   baselineLuna: number
+  /**
+   * true when baselineLuna was read from the blockchain. false (or missing, on older goals with a
+   * zero baseline) means it is not known yet; Holdfast fills it in at the first stake reading.
+   */
+  baselineFromChain?: boolean
   /** NIM locked through Holdfast for this goal (ledger, net of withdrawals). */
   lockedLuna: number
   validator: string | null
@@ -37,6 +42,8 @@ export interface StoreState {
   goals: Goal[]
   /** Set once Holdfast has created a staker for this address (first lock uses NewStaker). */
   stakerCreated: boolean
+  /** When this device last changed the goals (ms). */
+  updatedAt?: number
 }
 
 const key = (address: string) => `holdfast.v1.${address.replace(/\s/g, '').toUpperCase()}`
@@ -62,14 +69,21 @@ export function saveState(address: string, state: StoreState, storage: Storage =
   }
 }
 
-export const newId = (): string =>
-  Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+/** Goal ids appear in Goalkeeper links, so they include enough randomness not to be guessed. */
+export const newId = (): string => {
+  const rand =
+    typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+      ? Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => (b % 36).toString(36)).join('')
+      : Math.random().toString(36).slice(2, 10)
+  return Date.now().toString(36) + rand
+}
 
 export function createGoal(input: {
   name: string
   emoji: string
   targetLuna: number
   baselineLuna: number
+  baselineFromChain?: boolean
   validator: string | null
   now?: number
 }): Goal {
@@ -81,6 +95,7 @@ export function createGoal(input: {
     targetLuna: input.targetLuna,
     createdAt: now,
     baselineLuna: input.baselineLuna,
+    baselineFromChain: input.baselineFromChain ?? false,
     lockedLuna: 0,
     validator: input.validator,
     status: 'active',
@@ -98,7 +113,8 @@ export const activeGoal = (s: StoreState): Goal | undefined => s.goals.find((g) 
  * otherwise Holdfast's own ledger.
  */
 export function savedLuna(goal: Goal, onChainActive: number | null): number {
-  if (onChainActive === null) return goal.lockedLuna
+  // Without a known starting stake, on-chain totals could include savings from before the goal.
+  if (onChainActive === null || baselineUnknown(goal)) return goal.lockedLuna
   return Math.max(0, onChainActive - goal.baselineLuna)
 }
 
@@ -142,4 +158,20 @@ export function recordRelease(goal: Goal, tx: string, now = Date.now()): Goal {
 
 export function replaceGoal(s: StoreState, goal: Goal): StoreState {
   return { ...s, goals: s.goals.map((g) => (g.id === goal.id ? goal : g)) }
+}
+
+/** Whether the goal still needs its starting stake read from the blockchain. */
+export const baselineUnknown = (g: Goal): boolean =>
+  g.baselineFromChain === false || (g.baselineFromChain === undefined && g.baselineLuna === 0)
+
+/**
+ * Fill in an unknown starting stake from the first blockchain reading. Whatever is staked now,
+ * minus what Holdfast itself locked for this goal, was there before the goal.
+ */
+export function withChainBaseline(g: Goal, activeStake: number, now = Date.now()): Goal {
+  if (!baselineUnknown(g)) return g
+  // Right after a lock or withdrawal the reading may not include it yet; wait for a settled one.
+  if (g.events.some((e) => (e.type === 'lock' || e.type === 'unlock') && now - e.at < 3 * 60_000)) return g
+  const lockedStillActive = Math.max(0, g.lockedLuna - (g.pendingUnlock?.luna ?? 0))
+  return { ...g, baselineLuna: Math.max(0, activeStake - lockedStillActive), baselineFromChain: true }
 }
