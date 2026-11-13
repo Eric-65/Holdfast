@@ -90,15 +90,30 @@ const FAQ: [string, string][] = [
   ],
 ]
 
+/** 950 → "950", 12,400 → "12.4K", 100,000 → "100K", 2,500,000 → "2.5M": always fits a small tile. */
+export function compactNumber(n: number): string {
+  const units: [number, string][] = [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']]
+  for (const [size, suffix] of units) {
+    if (n >= size) {
+      const v = n / size
+      return `${v >= 100 ? Math.floor(v) : Math.floor(v * 10) / 10}${suffix}`
+    }
+  }
+  return String(Math.floor(n))
+}
+
 /** Live usage numbers, shown once there is something to show. */
 export function statsStrip(): Raw {
   const st = ctx.stats
   if (!st || st.savers < 1) return html``
-  return html`<p class="stats-strip" aria-label="Holdfast in numbers">
-    <span><b>${st.savers.toLocaleString('en-US')}</b> ${st.savers === 1 ? 'saver' : 'savers'}</span>
-    <span><b>${st.activeGoals.toLocaleString('en-US')}</b> active ${st.activeGoals === 1 ? 'goal' : 'goals'}</span>
-    <span><b>${formatNim(st.lockedLuna)}</b> NIM locked</span>
-  </p>`
+  const tile = (icon: string, value: string, label: string, full: string) =>
+    html`<li class="stats-tile" title="${full}"><span class="stats-icon" aria-hidden="true">${icon}</span><b>${value}</b><span class="stats-label">${label}</span></li>`
+  const nim = Math.floor(toNim(st.lockedLuna))
+  return html`<ul class="stats-strip" aria-label="Holdfast in numbers">
+    ${tile('👥', compactNumber(st.savers), st.savers === 1 ? 'saver' : 'savers', `${st.savers.toLocaleString('en-US')} savers`)}
+    ${tile('🎯', compactNumber(st.activeGoals), st.activeGoals === 1 ? 'active goal' : 'active goals', `${st.activeGoals.toLocaleString('en-US')} active goals`)}
+    ${tile('🔒', compactNumber(nim), 'NIM locked', `${nim.toLocaleString('en-US')} NIM locked`)}
+  </ul>`
 }
 
 export function renderLanding(root: HTMLElement): void {
