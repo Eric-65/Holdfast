@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { cleanNet, fetchCheers, httpTransport, relay, type RpcTransport } from './_lib/chain.js'
+import { cleanNet, fetchCheers, httpTransport, relay, rpcUrlFor, type RpcTransport } from './_lib/chain.js'
 import { ApiError, authenticate, claimInvite, createChallenge, inviteInfo, leaderboard, login, ownProfile, rateLimit, setName, type RequestContext } from './_lib/core.js'
 import { getState, publicGoal, publicStats, syncState } from './_lib/goals.js'
 import { storeFromEnv, type Store } from './_lib/store.js'
@@ -70,6 +70,14 @@ export function createHandler(
     }
     try {
       const url = new URL(req.url ?? '/', 'http://localhost')
+      // A link copied out of a chat app can arrive with its '&' encoded as %26
+      // (?a=rpc%26m=getBlockNumber). Read those extra parameters as if they were separate.
+      const first = url.searchParams.get('a') ?? ''
+      if (first.includes('&') || first.includes('=')) {
+        const extra = new URLSearchParams(`a=${first}`)
+        url.searchParams.delete('a')
+        extra.forEach((v, k) => url.searchParams.set(k, v))
+      }
       const action = url.searchParams.get('a') ?? ''
       const ip = (header(req, 'x-forwarded-for') ?? req.socket?.remoteAddress ?? 'unknown').split(',')[0]!.trim()
       const country = header(req, 'x-vercel-ip-country')
@@ -84,6 +92,21 @@ export function createHandler(
       })
 
       // Blockchain reads work even without the profile database.
+      // A one-word health check: is this version live, and does the blockchain relay answer?
+      if (req.method === 'GET' && action === 'health') {
+        let block: number | null = null
+        let chain = 'ok'
+        try {
+          const r = await relay(transport, { method: 'getBlockNumber', param: null, net: cleanNet(url.searchParams.get('net')) }, env)
+          const body = r.body as { result?: unknown; error?: { message?: string } }
+          if (typeof body.result === 'number') block = body.result
+          else chain = body.error?.message ?? 'no answer'
+        } catch (err) {
+          chain = err instanceof Error ? err.message : 'no answer'
+        }
+        return send(200, { ok: block !== null, version: 'live-goals', relay: chain, block, database: !!store, rpcServer: rpcUrlFor(cleanNet(url.searchParams.get('net')), env) })
+      }
+
       if (req.method === 'GET' && (action === 'rpc' || action === 'cheers')) {
         if (store) {
           const c = context(store)

@@ -249,3 +249,16 @@ describe('review fixes', () => {
     expect(await publicStats(ctx())).toMatchObject({ activeGoals: 0, lockedLuna: 0 })
   })
 })
+
+describe('health check and mangled links', () => {
+  it('answers ?a=health with the relay status, and reads %26-encoded parameters', async () => {
+    const handler = createHandler(() => null, async () => ({ result: { data: 4242, metadata: {} } }), {})
+    const health = await run(handler, '/api/hf?a=health')
+    expect(JSON.parse(health.body)).toMatchObject({ ok: true, relay: 'ok', block: 4242, database: false, rpcServer: 'https://rpc.nimiqwatch.com' })
+    const mangled = await run(handler, '/api/hf?a=rpc%26m=getBlockNumber')
+    expect([mangled.status, JSON.parse(mangled.body)]).toEqual([200, { result: 4242 }])
+
+    const down = createHandler(() => null, async () => ({ error: { message: 'upstream unavailable' } }), {})
+    expect(JSON.parse((await run(down, '/api/hf?a=health')).body)).toMatchObject({ ok: false, relay: 'upstream unavailable', block: null })
+  })
+})
