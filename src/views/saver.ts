@@ -106,13 +106,13 @@ export function compactNumber(n: number): string {
 export function statsStrip(): Raw {
   const st = ctx.stats
   if (!st || st.savers < 1) return html``
-  const tile = (icon: string, value: string, label: string, full: string) =>
-    html`<li class="stats-tile" title="${full}"><span class="stats-icon" aria-hidden="true">${icon}</span><b>${value}</b><span class="stats-label">${label}</span></li>`
+  const tile = (value: string, label: string, full: string) =>
+    html`<li class="stats-tile" title="${full}"><b>${value}</b><span class="stats-label">${label}</span></li>`
   const nim = Math.floor(toNim(st.lockedLuna))
   return html`<ul class="stats-strip" aria-label="Holdfast in numbers">
-    ${tile('👥', compactNumber(st.savers), st.savers === 1 ? 'saver' : 'savers', `${st.savers.toLocaleString('en-US')} savers`)}
-    ${tile('🎯', compactNumber(st.activeGoals), st.activeGoals === 1 ? 'active goal' : 'active goals', `${st.activeGoals.toLocaleString('en-US')} active goals`)}
-    ${tile('🔒', compactNumber(nim), 'NIM locked', `${nim.toLocaleString('en-US')} NIM locked`)}
+    ${tile(compactNumber(st.savers), st.savers === 1 ? 'saver' : 'savers', `${st.savers.toLocaleString('en-US')} savers`)}
+    ${tile(compactNumber(st.activeGoals), st.activeGoals === 1 ? 'active goal' : 'active goals', `${st.activeGoals.toLocaleString('en-US')} active goals`)}
+    ${tile(compactNumber(nim), 'NIM locked', `${nim.toLocaleString('en-US')} NIM locked`)}
   </ul>`
 }
 
