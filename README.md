@@ -28,7 +28,9 @@ Built for the Nimiq Mini Apps Competition, Cycle III (Save category).
 | Feature | What it does |
 |---|---|
 | 🔒 **Lock it** | Saving into a goal **stakes NIM from your own wallet**. Your money never leaves your control and it earns staking rewards. Getting it back takes Nimiq's unstaking cool-down, which slows down impulse withdrawals. |
-| 🛡️ **Goalkeeper** | You share a link with one trusted friend. Without signing up, they can see your progress, send you a **cheer** (a NIM gift with a message) and see if you **break the seal** (start withdrawing). |
+| 🛡️ **Goalkeeper** | You share a link with one trusted friend. Without signing up, they see your **live** progress, send you a **cheer** (a NIM gift with a message) and see if you **break the seal** (start withdrawing). |
+| 🎉 **Cheer wall** | Cheers are read straight from the blockchain and shown to you and your Goalkeeper. One tap locks them into your goal. |
+| ☁️ **Backup** | With a profile, your goals are backed up and come back on a new phone. |
 | 💵 **Dollar view** | Every amount shows in **NIM, USDT and NGN**. You can also set your target in USDT or naira. |
 | 👤 **Profiles & invites** | Your wallet is your account. You get a display name you can edit and your own invite link. Every new wallet that joins through your link counts as your referral, and a public **leaderboard** ranks savers by referrals. |
 | 🌗 **Light & dark theme** | Follows your phone's setting. Tap the sun/moon button to switch, and Holdfast remembers your choice. |
@@ -57,7 +59,8 @@ Holdfast shows each step and tells you what to do next.
 
 ### For Goalkeepers (the friend)
 - Open the link. No app install or account is needed.
-- See the goal, progress, amounts in USDT and naira, and whether it is 🔒 sealed, 🎉 reached or ⚠️ broken.
+- See the goal, live progress, amounts in USDT and naira, recent activity, the cheer wall, and whether it is 🔒 sealed, 🎉 reached or ⚠️ broken.
+- The page reads the saver's stake from the Nimiq blockchain, so a withdrawal shows up even if it was made outside Holdfast.
 - **Send a cheer:** pick an amount and write a short message. Inside Nimiq Pay it sends directly. Elsewhere it opens a Nimiq payment link.
 
 ### Opening Holdfast
@@ -102,7 +105,8 @@ Each profile also records how many wallets had already used the same device and 
 | Profiles, sign-in with a wallet signature, invite links, referrals, leaderboard | ✅ Built. Tested in a browser with simulated wallets that sign the way Nimiq wallets do. Needs a check with real Nimiq Pay signatures |
 | Amount parsing, address checks, goal history, share links, sign-in and referral rules | ✅ 44 automated tests |
 | Real staking transactions inside Nimiq Pay | ⚠️ Built with the official Nimiq SDK. Needs a final check on a real device |
-| Live progress straight from the blockchain | ⚙️ Works when an RPC address is set (see [Settings](#settings)). Otherwise it uses Holdfast's own records |
+| Live progress straight from the blockchain | ✅ Read through Holdfast's own read-only relay to a public Nimiq RPC server. No setting needed |
+| Goal backup, live Goalkeeper pages, cheer wall, usage numbers | ✅ Built and covered by automated tests. Needs a check on a real device |
 
 ---
 
@@ -145,6 +149,7 @@ Server settings (set on the host, not in `.env`):
 |---|---|
 | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | The Upstash Redis database that holds profiles and referrals. Vercel sets these for you when you connect the database (see [Deploy](#deploy)). `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` work too. |
 | `HF_REQUIRE_UNIQUE_DEVICE` | Set to `1` to count a referral only when the device and browser are new to Holdfast |
+| `NIMIQ_RPC_URL`, `NIMIQ_TESTNET_RPC_URL` | Nimiq RPC servers the relay reads from. Default `https://rpc.nimiqwatch.com` and `https://rpc.nimiq-testnet.com` |
 
 ### Deploy
 
@@ -164,7 +169,9 @@ The goals part of the app is a plain static website, so it also runs on any stat
 - **Sign-in:** the server issues a one-time message, the wallet signs it, and the server checks the Ed25519 signature and derives the address from the signing key. A profile can only be created by the wallet's owner.
 - **Invite links:** `/i/CODE` redirects to `/?ref=CODE`. The code is remembered on the device until the profile is created. The **Open in Nimiq Pay** button passes it along, and the fallbacks above cover the cases where Nimiq Pay opens Holdfast without it.
 - **Fresh counts:** referral totals and rank are fetched again whenever the Profile or Leaderboard screen is opened.
-- **Goalkeeper link:** the goal details sit in the part of the link after `#`, which browsers never send to a server.
+- **Blockchain reads:** the app asks its own API (`/api/hf?a=rpc`), which forwards only three read-only methods (`getBlockNumber`, `getStakerByAddress`, `getTransactionByHash`) to a public Nimiq RPC server. Public RPC servers don't accept requests from web pages, so this is what makes live progress work. Cheers come from `?a=cheers`, which reads the wallet's transaction history and keeps payments whose message starts with `Holdfast cheer:`.
+- **Safe withdrawals:** Nimiq's deactivate step sets the wallet's *total* active stake, so Holdfast always reads the real stake first and never guesses. Stake you had before the goal is left alone.
+- **Goalkeeper link:** the goal details sit in the part of the link after `#`, which browsers never send to a server. It also carries the goal id, so a signed-in saver's backed-up goal is loaded live. Without a backup the link still works as a snapshot.
 - **Open in Nimiq Pay:** the button uses Nimiq Pay's `nimiqpay://miniapp?url=…` link.
 - **Prices:** NIM prices from CoinGecko, converted to USDT with the live USDT rate, refreshed every 5 minutes. If it can't be reached, Holdfast shows the last known price.
 
@@ -186,8 +193,8 @@ tests/           automated tests
 
 - Nimiq counts all of a wallet's stake together, so Holdfast runs **one goal at a time**. Stake you already had before creating a goal doesn't count toward it.
 - Cheers arrive in the saver's normal balance. The saver can then lock them into the goal.
-- Without an RPC address, Goalkeepers see progress as of when the link was shared. Re-share it to update.
-- Goals stay on the device. A profile does not yet sync goals between phones.
+- If the saver has no profile, the Goalkeeper's page uses the blockchain for the amount but the goal details (name, target) come from the link.
+- Goals sync one way at a time: a phone with goals backs them up; a phone with none restores them. Using two phones at once, the last one to change wins.
 - One person with several wallets can still create several profiles. The stored device and browser IDs make this visible, and `HF_REQUIRE_UNIQUE_DEVICE=1` stops such wallets counting as referrals.
 
 ## License
