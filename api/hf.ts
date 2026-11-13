@@ -104,7 +104,7 @@ export function createHandler(
         } catch (err) {
           chain = err instanceof Error ? err.message : 'no answer'
         }
-        return send(200, { ok: block !== null, version: 'live-goals', relay: chain, block, database: !!store, rpcServer: rpcUrlFor(cleanNet(url.searchParams.get('net')), env) })
+        return send(200, { ok: block !== null, version: (env.VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 7), relay: chain, block, database: !!store, rpcServer: rpcUrlFor(cleanNet(url.searchParams.get('net')), env) })
       }
 
       if (req.method === 'GET' && (action === 'rpc' || action === 'cheers')) {
