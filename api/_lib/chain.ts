@@ -102,6 +102,17 @@ export async function relay(
 // ---------- Cheers ----------
 
 export const CHEER_PREFIX = 'Holdfast cheer: '
+/**
+ * Cheer messages: "Holdfast cheer: <message>" (older links) or "Holdfast cheer <goal>: <message>",
+ * where <goal> is the first 8 characters of the goal id the cheer was sent to.
+ */
+const CHEER_RE = /^Holdfast cheer(?: ([A-Za-z0-9]{1,8}))?: ([\s\S]*)$/
+
+export function parseCheerText(text: string): { goal?: string; message: string } | null {
+  const m = CHEER_RE.exec(text)
+  if (!m) return null
+  return { ...(m[1] ? { goal: m[1] } : {}), message: m[2]!.slice(0, 48) }
+}
 
 export interface Cheer {
   /** Shortened sender address. */
@@ -111,6 +122,8 @@ export interface Cheer {
   /** Block time (ms). */
   at: number
   hash: string
+  /** The goal the cheer was sent to (first 8 characters of its id), when named. */
+  goal?: string
 }
 
 /** Decode transaction data (hex) to text; null if it is not hex or not valid UTF-8. */
@@ -135,16 +148,18 @@ export function parseCheers(address: string, txs: unknown): Cheer[] {
     const from = normalizeAddress(tx.from)
     if (!to || !from || compact(to) !== me) continue
     const text = hexToText(tx.recipientData) ?? hexToText(tx.data)
-    if (!text?.startsWith(CHEER_PREFIX)) continue
+    const cheer = text ? parseCheerText(text) : null
+    if (!cheer) continue
     const luna = Number(tx.value)
     const hash = typeof tx.hash === 'string' ? tx.hash : ''
     if (!Number.isFinite(luna) || luna <= 0 || !hash) continue
     out.push({
       from: shortAddr(from),
       luna,
-      message: text.slice(CHEER_PREFIX.length).slice(0, 48),
+      message: cheer.message,
       at: Number(tx.timestamp) || 0,
       hash,
+      ...(cheer.goal ? { goal: cheer.goal } : {}),
     })
   }
   return out.sort((a, b) => b.at - a.at)

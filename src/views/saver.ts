@@ -1,18 +1,22 @@
-import { ctx, commit, readLiveStake, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues } from '../app'
+import { ctx, commit, expectStakeChange, readLiveStake, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues } from '../app'
 import { backupNow } from '../account'
-import { chainAvailable, readFreshFor } from '../lib/chain'
+import { chainAvailable, lastChainError, readFreshFor, type Cheer } from '../lib/chain'
 import { formatFiat, formatNim, formatAddress, isValidAddress, parseNimInput, pct, shortAddress, timeAgo, toLuna, toNim } from '../lib/format'
 import {
-  activeGoal,
-  baselineUnknown,
+  activeGoals,
+  checkpointRewards,
+  closeGoalInState,
+  startGoalWithdrawal,
   createGoal,
+  goalSavings,
+  ledgerOf,
+  MAX_ACTIVE_GOALS,
+  walletBaselineKnown,
   markReachedIfDone,
   recordLock,
   recordRelease,
   recordRetire,
-  recordUnlockStart,
   replaceGoal,
-  savedLuna,
   type Goal,
   type GoalEvent,
 } from '../lib/store'
@@ -259,10 +263,101 @@ export function renderConnectFailed(root: HTMLElement, message: string, onRetry:
 
 // ---------- Home (connected) ----------
 
+/** #/ — the goals list, or the new-goal form when there are none. */
 export function renderHome(root: HTMLElement): void {
-  const goal = activeGoal(ctx.state)
-  if (goal) return renderGoal(root, goal)
+  if (!activeGoals(ctx.state).length) return renderNewGoal(root)
+  renderGoalsList(root)
+}
+
+/** #/new — start another goal. */
+export function renderNewGoalScreen(root: HTMLElement): void {
+  if (activeGoals(ctx.state).length >= MAX_ACTIVE_GOALS) {
+    location.hash = '#/'
+    toast(`You can have up to ${MAX_ACTIVE_GOALS} goals at once`, 'info')
+    return
+  }
   renderNewGoal(root)
+}
+
+/** #/goal/<id> — one goal. An unknown or closed goal goes back to the list. */
+export function renderGoalDetail(root: HTMLElement, id: string): void {
+  const goal = ctx.state.goals.find((g) => g.id === id && g.status === 'active')
+  if (!goal) {
+    if (location.hash !== '#/') location.replace('#/')
+    return renderHome(root)
+  }
+  renderGoal(root, goal)
+}
+
+/** Saved amount for every active goal, from the live stake when it can be read. */
+const savingsNow = (): Map<string, number> => goalSavings(ctx.state, ctx.stake ? ctx.stake.balance : null)
+const isLive = (): boolean => !!ctx.stake && walletBaselineKnown(ctx.state)
+
+/** Where the numbers come from, said plainly. */
+function sourceLine(): string {
+  if (isLive()) return 'Live from the Nimiq blockchain'
+  if (ctx.stake) return 'From your Holdfast records (checking your starting stake…)'
+  if (chainAvailable()) return 'Network busy, showing your Holdfast records'
+  return 'From your Holdfast records'
+}
+
+function statusChip(goal: Goal): Raw {
+  if (goal.reachedAt) return html`<span class="chip chip-good">🎉 Reached</span>`
+  if (goal.pendingUnlock) return html`<span class="chip chip-bad">⏳ Withdrawing</span>`
+  if (goal.sealBrokenAt) return html`<span class="chip chip-bad">⚠️ Seal broken</span>`
+  return html`<span class="chip chip-lock">🔒 Sealed</span>`
+}
+
+/** Cheers for one goal: tagged with it, or untagged and sent since it was created. */
+export function cheersForGoal(cheers: Cheer[], goal: { id: string; createdAt: number }): Cheer[] {
+  const tag = goal.id.slice(0, 8)
+  return cheers.filter((c) => (c.goal ? c.goal === tag : c.at >= goal.createdAt))
+}
+
+function renderGoalsList(root: HTMLElement): void {
+  const goals = activeGoals(ctx.state)
+  const savings = savingsNow()
+  // A lock can carry a goal over its target: celebrate it once.
+  for (const g of goals) {
+    const reached = markReachedIfDone(g, savings.get(g.id) ?? 0)
+    if (reached !== g) {
+      commit(replaceGoal(ctx.state, reached))
+      toast(`Goal reached: ${g.name}! 🎉`, 'success')
+      return
+    }
+  }
+  const total = goals.reduce((a, g) => a + (savings.get(g.id) ?? 0), 0)
+  const full = goals.length >= MAX_ACTIVE_GOALS
+  root.innerHTML = html`${header()}
+  <main class="page">
+    <section class="goals-total">
+      <p class="eyebrow">My goals</p>
+      <div class="big-amount">${nim(total)} <span class="muted">saved</span></div>
+      ${fiatRow(total)}
+      <p class="muted small" title="${lastChainError}">${sourceLine()}</p>
+    </section>
+    <ul class="goal-list">
+      ${goals.map((g) => {
+        const saved = savings.get(g.id) ?? 0
+        const p = pct(saved, g.targetLuna)
+        return html`<li><a class="goal-card ${g.reachedAt ? 'reached' : ''} ${g.sealBrokenAt || g.pendingUnlock ? 'broken' : ''}" href="#/goal/${g.id}">
+          <span class="goal-card-ring">${ring(p, 58, 6)}<span class="goal-card-emoji">${g.emoji}</span></span>
+          <span class="goal-card-body">
+            <b class="goal-card-name">${g.name}</b>
+            <span class="goal-card-amount"><b>${formatNim(saved)}</b> <span class="muted">/ ${formatNim(g.targetLuna)} NIM · ${Math.floor(p)}%</span></span>
+            ${statusChip(g)}
+          </span>
+          <span class="goal-card-go" aria-hidden="true">›</span>
+        </a></li>`
+      })}
+    </ul>
+    ${
+      full
+        ? html`<p class="muted small center">You can have up to ${MAX_ACTIVE_GOALS} goals at once.</p>`
+        : html`<a class="btn btn-secondary" href="#/new">+ New goal</a>`
+    }
+    ${pastGoals()}
+  </main>`.html
 }
 
 function pastGoals(): Raw {
@@ -277,14 +372,34 @@ function pastGoals(): Raw {
 
 // ---------- New goal ----------
 
+/** Whether this wallet already stakes (its validator is then fixed for every goal). */
+function walletStakes(): boolean {
+  return ctx.state.stakerCreated || (ctx.stake ? ctx.stake.balance + ctx.stake.inactiveBalance + ctx.stake.retiredBalance > 0 : false)
+}
+
+/** The validator this wallet's stake is delegated to, as far as Holdfast knows. */
+function walletValidator(): string | null {
+  return ctx.stake?.delegation ?? ctx.state.goals.find((g) => g.validator)?.validator ?? null
+}
+
+function validatorName(address: string | null): string {
+  if (!address) return 'your validator'
+  const compact = address.replace(/\s/g, '').toUpperCase()
+  const v = ctx.validators.find((x) => x.address.replace(/\s/g, '').toUpperCase() === compact)
+  return v?.name ?? shortAddress(address)
+}
+
 function renderNewGoal(root: HTMLElement): void {
   void loadValidators()
   const units = ['nim', ...ctx.fiats.filter((f) => ctx.prices?.rates[f])]
   const validatorOptions = ctx.validators.slice(0, 25)
+  const hasGoals = activeGoals(ctx.state).length > 0
+  const stakes = walletStakes()
   root.innerHTML = html`${header()}
   <main class="page">
+    ${hasGoals ? html`<a class="back-link" href="#/">← Back to my goals</a>` : ''}
     <section class="hero small">
-      <h1>Start a goal</h1>
+      <h1>${hasGoals ? 'New goal' : 'Start a goal'}</h1>
       <p class="lead">What are you holding fast for?</p>
     </section>
     <form id="goal-form" class="card form" novalidate>
@@ -301,7 +416,10 @@ function renderNewGoal(root: HTMLElement): void {
         </div>
         <span class="hint" id="target-hint">&nbsp;</span>
       </label>
-      <label>Validator <span class="muted small">(who your stake is delegated to)</span>
+      ${
+        stakes
+          ? html`<p class="hint">Your NIM is staked with <b>${validatorName(walletValidator())}</b>. Every goal uses this one stake.</p>`
+          : html`<label>Validator <span class="muted small">(who your stake is delegated to)</span>
         ${
           validatorOptions.length
             ? html`<select name="validator">${validatorOptions.map(
@@ -310,8 +428,9 @@ function renderNewGoal(root: HTMLElement): void {
             : html`<span class="hint">${ctx.validatorsLoaded ? 'Validator list unavailable. Paste a validator address:' : 'Loading validators…'}</span>`
         }
         <input name="validatorCustom" class="${validatorOptions.length ? 'hidden' : ''}" placeholder="NQ.. validator address" autocomplete="off" spellcheck="false"/>
-        <span class="hint">Only used if you are not staking yet. Your NIM stays in your wallet's staking account, not with Holdfast.</span>
-      </label>
+        <span class="hint">Your NIM stays in your wallet's staking account, not with Holdfast. All your goals use this validator.</span>
+      </label>`
+      }
       <button class="btn btn-primary" type="submit">Create goal</button>
     </form>
     ${pastGoals()}
@@ -319,8 +438,8 @@ function renderNewGoal(root: HTMLElement): void {
 
   const form = $<HTMLFormElement>('#goal-form', root)!
   const sel = form.elements.namedItem('validator') as HTMLSelectElement | null
-  const custom = form.elements.namedItem('validatorCustom') as HTMLInputElement
-  sel?.addEventListener('change', () => custom.classList.toggle('hidden', sel.value !== '__custom'))
+  const custom = form.elements.namedItem('validatorCustom') as HTMLInputElement | null
+  if (custom) sel?.addEventListener('change', () => custom.classList.toggle('hidden', sel!.value !== '__custom'))
   const hint = $('#target-hint', root)!
   const updateHint = () => {
     const luna = targetLuna(form)
@@ -337,14 +456,15 @@ function renderNewGoal(root: HTMLElement): void {
     const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim()
     const target = targetLuna(form)
     const emoji = (form.querySelector('input[name=emoji]:checked') as HTMLInputElement)?.value ?? '🎯'
-    let validator: string | null = sel && sel.value !== '__custom' ? sel.value : custom.value.trim()
+    let validator: string | null = stakes ? walletValidator() : sel && sel.value !== '__custom' ? sel.value : (custom?.value.trim() ?? '')
     if (!name) return toast('Give your goal a name', 'error')
     if (!target) return toast('Enter a target amount', 'error')
+    if (activeGoals(ctx.state).length >= MAX_ACTIVE_GOALS) return toast(`You can have up to ${MAX_ACTIVE_GOALS} goals at once`, 'info')
     if (validator && !isValidAddress(validator)) return toast('That validator address is not valid', 'error')
     validator = validator ? formatAddress(validator) : null
     void busy($<HTMLButtonElement>('button[type=submit]', form), 'Creating…', async () => {
-      // Stake you already have doesn't count toward a new goal, so read it first.
-      if (!ctx.stake && chainAvailable()) await refreshChain()
+      // Stake that belongs to no goal doesn't count toward a new one, so read it first.
+      if ((!ctx.stake || !walletBaselineKnown(ctx.state)) && chainAvailable()) await refreshChain()
       const goal = createGoal({
         name,
         emoji,
@@ -354,6 +474,7 @@ function renderNewGoal(root: HTMLElement): void {
         validator,
       })
       commit({ ...ctx.state, goals: [...ctx.state.goals, goal] })
+      location.hash = `#/goal/${goal.id}`
       toast('Goal created. Lock your first NIM!', 'success')
     })
   })
@@ -372,7 +493,7 @@ function targetLuna(form: HTMLFormElement): number | null {
 // ---------- Goal dashboard ----------
 
 function currentSaved(goal: Goal): number {
-  return savedLuna(goal, ctx.stake ? ctx.stake.balance : null)
+  return savingsNow().get(goal.id) ?? 0
 }
 
 function renderGoal(root: HTMLElement, goal: Goal): void {
@@ -386,15 +507,14 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
   // The lock form shows the wallet balance as a hint; this is the only screen that asks for it.
   void refreshBalance()
   void refreshCheers()
-  const cheers = (ctx.cheers ?? []).filter((c) => c.at >= goal.createdAt)
+  const cheers = cheersForGoal(ctx.cheers ?? [], goal)
   const cheersLuna = cheers.reduce((a, c) => a + c.luna, 0)
   const p = pct(saved, goal.targetLuna)
   const left = Math.max(0, goal.targetLuna - saved)
-  const rewards = ctx.stake && !baselineUnknown(goal) ? saved - goal.lockedLuna : 0
-  const live = !!ctx.stake && !baselineUnknown(goal)
-  const source = live ? 'Live from the Nimiq blockchain' : 'From your Holdfast ledger'
+  const rewards = isLive() ? saved - ledgerOf(goal) : 0
   root.innerHTML = html`${header()}
   <main class="page">
+    <a class="back-link" href="#/">← My goals</a>
     <section class="goal-hero ${goal.sealBrokenAt ? 'broken' : ''} ${goal.reachedAt ? 'reached' : ''}">
       <div class="ring-wrap">
         ${ring(p)}
@@ -416,7 +536,7 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
         }
         ${rewards > 0 ? html`<span class="chip chip-good">+${formatNim(rewards, { decimals: 2 })} NIM rewards</span>` : ''}
       </div>
-      <p class="muted small">${source}${ctx.stake ? '' : chainAvailable() ? ' (chain unreachable)' : ''}</p>
+      <p class="muted small" title="${lastChainError}">${sourceLine()}</p>
     </section>
 
     ${goal.pendingUnlock ? unlockCard(goal) : ''}
@@ -471,7 +591,7 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
           ? ''
           : html`<button class="btn btn-danger-ghost" id="break">Break the seal (withdraw)</button>`
       }
-      <button class="btn btn-link" id="close-goal">${goal.reachedAt ? 'Finish goal & start a new one' : 'Close this goal'}</button>
+      <button class="btn btn-link" id="close-goal">${goal.reachedAt ? 'Finish this goal' : 'Close this goal'}</button>
     </section>
     <p class="footnote muted small">Wallet ${shortAddress(ctx.address ?? '')} · Holdfast is non-custodial and never holds your NIM.</p>
   </main>`.html
@@ -553,7 +673,8 @@ async function lock(goal: Goal, luna: number): Promise<void> {
     } else {
       // A goal created before the validator list had loaded has no validator yet. Use the
       // top-ranked one, which is also the form's default choice, and remember it on the goal.
-      let validator = goal.validator
+      // One wallet stakes with one validator; every goal uses it.
+      let validator = walletValidator() ?? goal.validator
       if (!validator) {
         await loadValidators(true)
         validator = ctx.validators[0] ? formatAddress(ctx.validators[0].address) : null
@@ -573,7 +694,11 @@ async function lock(goal: Goal, luna: number): Promise<void> {
       }
     }
     const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
-    commit({ ...replaceGoal(ctx.state, recordLock(latest, luna, tx)), stakerCreated: true })
+    // Record what every goal has earned so far first, so this lock doesn't move rewards between goals.
+    const before = checkpointRewards(ctx.state, ctx.stake ? ctx.stake.balance : null)
+    const current = before.goals.find((g) => g.id === goal.id) ?? latest
+    commit({ ...replaceGoal(before, recordLock(current, luna, tx)), stakerCreated: true })
+    expectStakeChange(luna)
     toast(`Locked ${formatNim(luna)} NIM. Hold fast! 🔒`, 'success')
     afterTransaction()
   } catch (err) {
@@ -597,7 +722,9 @@ function keeperPayload(goal: Goal): KeeperPayload {
     e: goal.emoji,
     t: goal.targetLuna,
     a: formatAddress(ctx.address ?? ''),
-    b: goal.baselineLuna,
+    // With several goals the wallet's starting stake alone doesn't give one goal's share, so a link
+    // without a backed-up goal shows its snapshot rather than guessing from the chain.
+    b: 0,
     c: goal.createdAt,
     s: currentSaved(goal),
     st: Date.now(),
@@ -654,7 +781,9 @@ function shareKeeper(goal: Goal): void {
  * starting stake is unknown, what Holdfast locked for it), never more than is actually active.
  */
 function goalShare(goal: Goal, liveActive: number): number {
-  const own = baselineUnknown(goal) ? goal.lockedLuna - (goal.pendingUnlock?.luna ?? 0) : savedLuna(goal, liveActive)
+  // This goal's part of the live stake (or its own ledger while the wallet baseline is unknown),
+  // never more than is actually active. Other goals' shares are not touched.
+  const own = goalSavings(ctx.state, liveActive).get(goal.id) ?? 0
   return Math.max(0, Math.min(liveActive, own))
 }
 
@@ -738,8 +867,8 @@ async function startUnlock(goal: Goal, luna: number): Promise<boolean> {
   const newActiveBalance = live.balance - luna
   try {
     const tx = await w.sendSetActiveStakeTransaction({ newActiveBalance })
-    const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
-    commit(replaceGoal(ctx.state, recordUnlockStart(latest, luna, tx)))
+    commit(startGoalWithdrawal(ctx.state, goal.id, luna, tx, live.balance))
+    expectStakeChange(-luna)
     toast('Seal broken. Your NIM is cooling down.', 'info')
     afterTransaction()
     return true
@@ -798,15 +927,27 @@ function bindUnlockCard(root: HTMLElement, goal: Goal): void {
 }
 
 function closeGoal(goal: Goal): void {
+  if (goal.pendingUnlock) {
+    toast('Finish the withdrawal on this goal first, then you can close it.', 'info')
+    return
+  }
+  const saved = currentSaved(goal)
+  const others = activeGoals(ctx.state).length > 1
   openSheet(
     html`<h2>${goal.reachedAt ? 'Finish this goal?' : 'Close this goal?'}</h2>
-      <p class="muted">Your NIM stays staked and keeps earning. Closing only archives the goal in Holdfast so you can start a new one.</p>
+      <p class="muted">The ${formatNim(saved)} NIM in <b>${goal.emoji} ${goal.name}</b> stays staked in your wallet and keeps earning.
+        Closing only moves the goal to Past goals.</p>
+      <p class="muted small">${
+        others
+          ? 'That NIM is set aside from your other goals, so their numbers stay the same.'
+          : 'That NIM no longer counts toward a goal, so a new goal starts from zero.'
+      }</p>
       <button class="btn btn-primary" id="confirm-close">${goal.reachedAt ? 'Finish goal' : 'Close goal'}</button>`,
     (sheet, close) => {
       $('#confirm-close', sheet)!.addEventListener('click', () => {
-        const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
-        commit(replaceGoal(ctx.state, { ...latest, status: latest.reachedAt ? 'completed' : 'archived' }))
+        commit(closeGoalInState(ctx.state, goal.id, ctx.stake ? ctx.stake.balance : null))
         close()
+        location.hash = '#/'
       })
     },
   )

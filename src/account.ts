@@ -1,7 +1,7 @@
 import { commit, ctx, emit } from './app'
 import { api, ApiFailure, type OwnProfile, type SyncedState } from './lib/api'
 import { browserId, clearInviteCode, pendingInviteCode, sessionToken, setSessionToken } from './lib/identity'
-import { savedLuna } from './lib/store'
+import { goalSavings, migrateState } from './lib/store'
 import { deviceIdentifier, hostNetwork } from './lib/wallet'
 import { toast } from './ui'
 
@@ -161,18 +161,25 @@ export function signOut(): void {
 // ---------- Goal backup ----------
 
 /** What the server keeps: the goals, plus the amount saved so a Goalkeeper sees it without the chain. */
-function backupPayload(): Omit<SyncedState, 'updatedAt'> {
-  const active = ctx.stake ? ctx.stake.balance : null
+/** Goals kept in the backup: every active goal plus the newest closed ones. */
+const BACKUP_GOALS = 24
+
+export function backupPayload(): Omit<SyncedState, 'updatedAt'> {
+  const savings = goalSavings(ctx.state, ctx.stake ? ctx.stake.balance : null)
+  const active = ctx.state.goals.filter((g) => g.status === 'active')
+  const closed = ctx.state.goals.filter((g) => g.status !== 'active').slice(-(BACKUP_GOALS - active.length))
   return {
-    // At most 12 goals: the newest closed ones plus the active one, whatever its position.
-    goals: [...ctx.state.goals.filter((g) => g.status !== 'active').slice(-11), ...ctx.state.goals.filter((g) => g.status === 'active')]
+    goals: [...closed, ...active]
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((g) => ({
-      ...g,
-      savedLuna: g.status === 'active' ? savedLuna(g, active) : g.lockedLuna,
-      events: g.events.slice(-40),
-    })),
+        ...g,
+        // What a Goalkeeper sees without the chain: the goal's share now (its ledger when closed).
+        savedLuna: g.status === 'active' ? (savings.get(g.id) ?? 0) : g.lockedLuna,
+        events: g.events.slice(-40),
+      })),
     stakerCreated: ctx.state.stakerCreated,
+    walletBaselineLuna: Math.max(0, Math.floor(ctx.state.walletBaselineLuna ?? 0)),
+    walletBaselineFromChain: ctx.state.walletBaselineFromChain === true,
     accounts: ctx.accounts,
     network: hostNetwork(),
   }
@@ -217,8 +224,17 @@ export async function restoreOrBackup(): Promise<void> {
     try {
       const { state } = await api.state(token)
       if (address === ctx.address && state?.goals.length && !ctx.state.goals.length) {
-        commit({ version: 1, goals: state.goals, stakerCreated: state.stakerCreated })
-        toast('Welcome back. Your goal was restored from your profile.', 'success')
+        commit(
+          migrateState({
+            version: 1,
+            goals: state.goals,
+            stakerCreated: state.stakerCreated,
+            ...(state.walletBaselineFromChain !== undefined
+              ? { walletBaselineLuna: state.walletBaselineLuna ?? 0, walletBaselineFromChain: state.walletBaselineFromChain }
+              : {}),
+          }),
+        )
+        toast(`Welcome back. Your ${state.goals.filter((g) => g.status === 'active').length === 1 ? 'goal was' : 'goals were'} restored from your profile.`, 'success')
         return
       }
     } catch {

@@ -73,7 +73,7 @@ describe('goal backup', () => {
     expect(bad({ lockedLuna: 1.5 })).toThrow()
     expect(bad({ status: 'deleted' })).toThrow()
     expect(bad({ validator: 'NQ00 nope' })).toThrow()
-    expect(() => cleanState({ goals: [goal(), goal({ id: 'other123' })] }, me, now)).toThrow() // two active goals
+    expect(() => cleanState({ goals: [goal(), goal({ id: 'other123' })] }, me, now)).not.toThrow() // several active goals are fine
     expect(() => cleanState({ goals: 'nope' }, me, now)).toThrow()
     // Unknown event types and bad hashes are dropped instead of failing the whole backup.
     const s = cleanState({ goals: [goal({ events: [{ type: 'hack', luna: 1, at: 1 }, { type: 'lock', luna: 5, at: now, tx: 'zz' }] })] }, me, now)
@@ -214,8 +214,8 @@ describe('review fixes', () => {
   it('rejects oversized backups instead of silently trimming them', () => {
     const me = newAddress()
     const closed = (i: number) => goal({ id: `closed${i}xx`, status: 'archived' })
-    expect(() => cleanState({ goals: Array.from({ length: 13 }, (_, i) => closed(i)) }, me, now)).toThrow(/12 goals/)
-    expect(() => cleanState({ goals: Array.from({ length: 12 }, (_, i) => closed(i)) }, me, now)).not.toThrow()
+    expect(() => cleanState({ goals: Array.from({ length: 25 }, (_, i) => closed(i)) }, me, now)).toThrow(/24 goals/)
+    expect(() => cleanState({ goals: Array.from({ length: 24 }, (_, i) => closed(i)) }, me, now)).not.toThrow()
     const events = (n: number) => Array.from({ length: n }, () => ({ type: 'lock', luna: 1, at: now }))
     expect(() => cleanState({ goals: [goal({ events: events(41) })] }, me, now)).toThrow(/40 events/)
     expect(cleanState({ goals: [goal({ events: events(40) })] }, me, now).goals[0]!.events).toHaveLength(40)
@@ -260,5 +260,85 @@ describe('health check and mangled links', () => {
 
     const down = createHandler(() => null, async () => ({ error: { message: 'upstream unavailable' } }), {})
     expect(JSON.parse((await run(down, '/api/hf?a=health')).body)).toMatchObject({ ok: false, relay: 'upstream unavailable', block: null })
+  })
+})
+
+describe('several goals on the server', () => {
+  const active = (i: number) => goal({ id: `active${i}xx`, lockedLuna: (i + 1) * 10_00000 })
+
+  it('accepts up to 5 active goals and refuses a sixth', () => {
+    const me = newAddress()
+    expect(cleanState({ goals: Array.from({ length: 5 }, (_, i) => active(i)) }, me, now).goals).toHaveLength(5)
+    expect(() => cleanState({ goals: Array.from({ length: 6 }, (_, i) => active(i)) }, me, now)).toThrow(/5 active goals/)
+  })
+
+  it('validates the wallet baseline', () => {
+    const me = newAddress()
+    const ok = cleanState({ goals: [goal()], walletBaselineLuna: 750_00000, walletBaselineFromChain: true }, me, now)
+    expect([ok.walletBaselineLuna, ok.walletBaselineFromChain]).toEqual([750_00000, true])
+    expect(cleanState({ goals: [goal()] }, me, now).walletBaselineLuna).toBeUndefined() // older phones
+    for (const bad of [{ walletBaselineLuna: -1, walletBaselineFromChain: true }, { walletBaselineLuna: 1.5, walletBaselineFromChain: true }, { walletBaselineLuna: 2e16, walletBaselineFromChain: true }, { walletBaselineLuna: 5, walletBaselineFromChain: 'yes' }])
+      expect(() => cleanState({ goals: [goal()], ...bad }, me, now)).toThrow()
+  })
+
+  it('counts every active goal and its NIM in the public numbers', async () => {
+    const [a, b] = [newAddress(), newAddress()]
+    await syncState(ctx(), a, { state: { goals: [active(0), active(1), active(2), goal({ id: 'closed99', status: 'archived' })] } })
+    await syncState(ctx(), b, { state: { goals: [active(3)] } })
+    expect(await publicStats(ctx())).toMatchObject({ activeGoals: 4, lockedLuna: (10 + 20 + 30 + 40) * 1_00000 })
+    // A backup from before several goals (locked amount, no goal count) still counts as one goal.
+    await store.cmd('HSET', 'locked', 'NQOLDSAVER', 5_00000)
+    expect(await publicStats(ctx())).toMatchObject({ activeGoals: 5 })
+  })
+
+  it('gives a Goalkeeper the other goals by amount only, never their names', async () => {
+    const me = newAddress()
+    await syncState(ctx(), me, { state: { goals: [active(0), active(1)], walletBaselineLuna: 0, walletBaselineFromChain: true } })
+    const r = await publicGoal(ctx(), me, 'active1xx')
+    expect(r.goal.name).toBe('Rent buffer')
+    expect(r.wallet.goals).toEqual([
+      { self: false, lockedLuna: 10_00000, pendingLuna: 0, rewardLuna: 0 },
+      { self: true, lockedLuna: 20_00000, pendingLuna: 0, rewardLuna: 0 },
+    ])
+    expect(JSON.stringify(r.wallet)).not.toContain('active0xx')
+  })
+
+  it('reads tagged and untagged cheers', () => {
+    const me = newAddress()
+    const friend = newAddress()
+    const tx = (h: string, text: string, at: number) => ({ hash: h, from: friend, to: me, value: 1_00000, timestamp: at, recipientData: hex(text) })
+    const cheers = parseCheers(me, [
+      tx('t1', 'Holdfast cheer mhx8k2ab: For your fees!', 3000),
+      tx('t2', 'Holdfast cheer: Old link', 2000),
+      tx('t3', 'Holdfast cheerful: not ours', 1000),
+      tx('t4', 'Holdfast cheer toolongtag9: nope', 500),
+    ])
+    expect(cheers.map((c) => [c.hash, c.goal ?? null, c.message])).toEqual([
+      ['t1', 'mhx8k2ab', 'For your fees!'],
+      ['t2', null, 'Old link'],
+    ])
+  })
+})
+
+describe('chain diagnostics', () => {
+  it('health reports the stake for an address and whether the phone calls an RPC server directly', async () => {
+    const me = newAddress()
+    const handler = createHandler(
+      () => null,
+      async (_url, body: any) => (body.method === 'getBlockNumber' ? { result: { data: 9, metadata: {} } } : { result: { data: { balance: 123 }, metadata: {} } }),
+      { VITE_NIMIQ_RPC_URL: 'https://some.rpc' },
+    )
+    const r = JSON.parse((await run(handler, `/api/hf?a=health&addr=${me.replace(/\s/g, '')}`)).body)
+    expect(r).toMatchObject({ ok: true, block: 9, directRpcFromPhone: 'https://some.rpc', staker: { result: { balance: 123 } } })
+    const noVite = JSON.parse((await run(createHandler(() => null, async () => ({ result: 1 }), {}), '/api/hf?a=health')).body)
+    expect(noVite.directRpcFromPhone).toBe(false)
+    expect(noVite.staker).toBeUndefined()
+  })
+
+  it('treats "not a staker" answers as zero stake, not as a failure', async () => {
+    const { isNotAStaker } = await import('../src/lib/chain')
+    for (const m of ['Staker not found: NQ12', 'No staker with address NQ..', 'Account is not a staker', 'Staker does not exist']) expect(isNotAStaker(m)).toBe(true)
+    // A server that can't answer must never look like "no stake".
+    for (const m of ['Method not found', 'Internal error', 'timeout', 'RPC method getStakerByAddress not found']) expect(isNotAStaker(m)).toBe(false)
   })
 })

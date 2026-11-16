@@ -1,6 +1,6 @@
 import { getStakeTotals, fetchCheers, fetchValidators, chainAvailable, readFreshFor, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
 import { getPrices, type PriceState } from './lib/prices'
-import { activeGoal, baselineUnknown, loadState, replaceGoal, saveState, withChainBaseline, type StoreState } from './lib/store'
+import { loadState, saveState, withWalletBaseline, type StoreState } from './lib/store'
 import { hostFiat, hostNetwork, type Wallet } from './lib/wallet'
 import { toNim } from './lib/format'
 import type { OwnProfile, PublicStats } from './lib/api'
@@ -111,15 +111,42 @@ export async function attachWallet(wallet: Wallet): Promise<void> {
  * to send a transaction must use the return value, never ctx.stake, so they never act on an old
  * number.
  */
+/**
+ * Right after a lock or withdrawal the network may still answer with the stake from before it
+ * (the block isn't in yet, or a cached answer). Until a reading shows the change, the screen keeps
+ * the expected number and such a reading doesn't count as fresh, so a withdrawal never acts on it.
+ */
+let expected: { balance: number; dir: 1 | -1; until: number } | null = null
+const EXPECT_MS = 3 * 60_000
+const LUNA_PER_NIM = 100_000
+
+/** Call after Nimiq Pay sent a transaction that changes the active stake by `delta` luna. */
+export function expectStakeChange(delta: number): void {
+  if (!ctx.stake || !delta) return
+  const balance = Math.max(0, ctx.stake.balance + delta)
+  expected = { balance, dir: delta > 0 ? 1 : -1, until: Date.now() + EXPECT_MS }
+  ctx.stake = { ...ctx.stake, balance }
+  emit()
+}
+
+/** Whether a reading already includes the change we're waiting for (rewards only ever add a little). */
+export function readingShowsChange(reading: number, exp: { balance: number; dir: 1 | -1 }): boolean {
+  return exp.dir > 0 ? reading >= exp.balance - 1 : reading <= exp.balance + LUNA_PER_NIM
+}
+
 export async function refreshChain(): Promise<StakerInfo | null> {
   if (!ctx.wallet || !ctx.accounts.length || !chainAvailable()) return null
-  const stake = await getStakeTotals(ctx.accounts)
+  let stake = await getStakeTotals(ctx.accounts)
+  if (stake && expected) {
+    if (Date.now() > expected.until || readingShowsChange(stake.balance, expected)) expected = null
+    else stake = null // an older answer: keep showing the expected number, and don't call it fresh
+  }
   if (stake) ctx.stake = stake
-  const goal = activeGoal(ctx.state)
-  if (ctx.stake && goal && baselineUnknown(goal)) {
-    const fixed = withChainBaseline(goal, ctx.stake.balance)
-    if (fixed !== goal) {
-      commit(replaceGoal(ctx.state, fixed), { quiet: true })
+  // The first settled reading tells how much of the stake belongs to no goal.
+  if (stake) {
+    const fixed = withWalletBaseline(ctx.state, stake.balance)
+    if (fixed !== ctx.state) {
+      commit(fixed, { quiet: true })
       return stake
     }
   }

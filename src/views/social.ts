@@ -344,7 +344,7 @@ export function tabBar(active: 'goal' | 'board' | 'me'): Raw {
     html`<a href="${href}" class="${id === active ? 'active' : ''}" ${id === active ? raw('aria-current="page"') : ''}>
       <span class="tab-icon" aria-hidden="true">${icon}${dot ? raw('<i class="tab-dot"></i>') : ''}</span><span>${label}</span></a>`
   return html`<nav class="tabbar" aria-label="Main">
-    ${tab('goal', '#/', '🎯', 'Goal')}
+    ${tab('goal', '#/', '🎯', 'Goals')}
     ${tab('board', '#/board', '🏆', 'Leaderboard')}
     ${tab('me', '#/me', '👤', 'Profile', ctx.profileStatus === 'signed_out')}
   </nav>`

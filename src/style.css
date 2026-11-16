@@ -360,3 +360,27 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
   background: color-mix(in srgb, var(--gold-2) 30%, transparent); color: color-mix(in srgb, var(--gold) 70%, var(--ink));
 }
 .cheer-msg { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+
+/* ---------- Several goals ---------- */
+.back-link { align-self: flex-start; padding: 6px 2px; font-weight: 700; color: var(--ink-2); text-decoration: none; }
+.back-link:active { opacity: 0.7; }
+.goals-total { text-align: center; padding: 10px 4px 2px; }
+.goals-total .eyebrow { margin: 0 0 4px; }
+.goal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.goal-card {
+  display: flex; align-items: center; gap: 14px; padding: 14px 14px 14px 12px;
+  background: var(--surface); border: 1.5px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+  color: inherit; text-decoration: none;
+}
+.goal-card:active { transform: scale(0.99); }
+.goal-card-ring { position: relative; flex: 0 0 58px; width: 58px; height: 58px; }
+.goal-card-ring .ring { width: 58px; height: 58px; }
+.goal-card-emoji { position: absolute; inset: 0; display: grid; place-items: center; font-size: 1.45rem; }
+.goal-card.reached .ring-fill { stroke: var(--good); }
+.goal-card.broken .ring-fill { stroke: var(--bad); }
+.goal-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.goal-card-name { font-size: 1.05rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-card-amount { font-size: 0.9rem; }
+.goal-card-amount b { font-variant-numeric: tabular-nums; }
+.goal-card .chip { font-size: 0.74rem; padding: 3px 9px; }
+.goal-card-go { flex: 0 0 auto; font-size: 1.6rem; color: var(--muted); line-height: 1; }

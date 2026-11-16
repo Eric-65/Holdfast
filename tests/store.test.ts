@@ -74,7 +74,7 @@ describe('starting stake not known when the goal was made', () => {
 
 describe('persistence', () => {
   it('round-trips per address and survives corrupt data', () => {
-    const state = { version: 1 as const, goals: [mk()], stakerCreated: true }
+    const state = { version: 1 as const, goals: [mk()], stakerCreated: true, walletBaselineLuna: 50_00000, walletBaselineFromChain: true }
     saveState('NQ07 0000', state)
     expect(loadState('nq070000')).toEqual(state)
     localStorage.setItem('holdfast.v1.BROKEN', '{nope')

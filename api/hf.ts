@@ -104,7 +104,29 @@ export function createHandler(
         } catch (err) {
           chain = err instanceof Error ? err.message : 'no answer'
         }
-        return send(200, { ok: block !== null, version: (env.VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 7), relay: chain, block, database: !!store, rpcServer: rpcUrlFor(cleanNet(url.searchParams.get('net')), env) })
+        // Optional: &addr=NQ... also reads that wallet's stake, the same way the goal screen does.
+        let staker: unknown = undefined
+        const addr = url.searchParams.get('addr')
+        if (addr) {
+          try {
+            const r = await relay(transport, { method: 'getStakerByAddress', param: addr, net: cleanNet(url.searchParams.get('net')) }, env)
+            const body = r.body as { result?: unknown; error?: { message?: string } }
+            staker = body.error ? { error: body.error.message ?? 'error' } : { result: body.result ?? null }
+          } catch (err) {
+            staker = { error: err instanceof Error ? err.message : 'no answer' }
+          }
+        }
+        return send(200, {
+          ok: block !== null,
+          version: (env.VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 7),
+          relay: chain,
+          block,
+          database: !!store,
+          rpcServer: rpcUrlFor(cleanNet(url.searchParams.get('net')), env),
+          // If set, the app calls this server straight from the phone, which most servers don't allow.
+          directRpcFromPhone: env.VITE_NIMIQ_RPC_URL ? env.VITE_NIMIQ_RPC_URL : false,
+          ...(staker !== undefined ? { staker } : {}),
+        })
       }
 
       if (req.method === 'GET' && (action === 'rpc' || action === 'cheers')) {

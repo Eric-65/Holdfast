@@ -35,6 +35,7 @@ export interface SyncedGoal {
   targetLuna: number
   baselineLuna: number
   lockedLuna: number
+  rewardLuna?: number
   savedLuna: number
   createdAt: number
   status: 'active' | 'completed' | 'archived'
@@ -49,6 +50,8 @@ export interface SyncedGoal {
 export interface SyncedState {
   goals: SyncedGoal[]
   stakerCreated: boolean
+  walletBaselineLuna?: number
+  walletBaselineFromChain?: boolean
   accounts: string[]
   network: 'mainnet' | 'testnet'
   updatedAt: number
@@ -56,6 +59,12 @@ export interface SyncedState {
 
 export interface PublicGoal {
   goal: SyncedGoal
+  /** The saver's active goals by amount only; absent from servers older than several-goals support. */
+  wallet?: {
+    baselineLuna: number | null
+    baselineFromChain: boolean | null
+    goals: { self: boolean; lockedLuna: number; pendingLuna: number; rewardLuna?: number }[]
+  }
   owner: { name: string }
   accounts: string[]
   network: 'mainnet' | 'testnet'

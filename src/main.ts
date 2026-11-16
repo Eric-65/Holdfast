@@ -8,7 +8,7 @@ import { connectNimiqPay, errorMessage, insideNimiqPay, isUserRejection } from '
 import { html, toast } from './ui'
 import { header } from './views/common'
 import { renderKeeper } from './views/keeper'
-import { renderConnectFailed, renderConnecting, renderHome, renderLanding } from './views/saver'
+import { renderConnectFailed, renderConnecting, renderGoalDetail, renderHome, renderLanding, renderNewGoalScreen } from './views/saver'
 import { openWelcomeSheet, renderBoard, renderProfile, tabBar } from './views/social'
 
 const root = document.getElementById('app')!
@@ -59,6 +59,9 @@ function renderRoute(): 'goal' | 'board' | 'me' | null {
   if (hash.startsWith('/board') && ctx.apiAvailable !== false) return renderBoard(root), 'board'
   if (ctx.wallet) {
     if (hash.startsWith('/me') && ctx.apiAvailable !== false) return renderProfile(root), 'me'
+    if (hash === '/new') return renderNewGoalScreen(root), 'goal'
+    const goal = hash.match(/^\/goal\/([A-Za-z0-9]{6,32})$/)
+    if (goal) return renderGoalDetail(root, goal[1]!), 'goal'
     return renderHome(root), 'goal'
   }
   if (conn === 'connecting') renderConnecting(root)
@@ -193,6 +196,13 @@ async function boot(): Promise<void> {
   const late = await connectNimiqPay(10_000)
   if (late && !ctx.wallet) void connect()
 }
+
+// While a goal screen is open, read the stake again every 30 seconds, so a busy network
+// recovers to live numbers on its own.
+window.setInterval(() => {
+  const onGoals = !/^#\/(me|board|keep\/)/.test(location.hash)
+  if (ctx.wallet && onGoals && document.visibilityState === 'visible' && !document.querySelector('.sheet-backdrop')) void refreshChain()
+}, 30_000)
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && ctx.wallet) {

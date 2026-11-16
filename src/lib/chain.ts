@@ -42,19 +42,36 @@ export const readFreshFor = (ms: number): void => {
 const timeout = (ms: number): AbortSignal | undefined =>
   typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined
 
+/** An error reported by the RPC server itself (it answered), as opposed to no answer at all. */
+export class ChainAnswerError extends Error {}
+
+/**
+ * VITE_NIMIQ_RPC_URL lets the app call an RPC server straight from the phone. Most public servers
+ * don't allow that (browsers block it, CORS), so after the first failed call Holdfast uses its own
+ * relay for the rest of the visit.
+ */
+let directOk = true
+/** Why the last blockchain read failed, for the goal screen's details. */
+export let lastChainError = ''
+
 let rpcId = 1
 async function rpc<T>(method: string, params: string[], net: Net = defaultNet): Promise<T> {
-  if (config.rpcUrl) {
-    const res = await fetch(config.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }),
-      signal: timeout(10_000),
-    })
-    const json = await res.json()
-    if (json.error) throw new Error(json.error.data || json.error.message || 'RPC error')
-    // Albatross RPC wraps results as { data, metadata }.
-    return (json.result && 'data' in json.result ? json.result.data : json.result) as T
+  if (config.rpcUrl && directOk) {
+    try {
+      const res = await fetch(config.rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }),
+        signal: timeout(10_000),
+      })
+      const json = await res.json()
+      if (json.error) throw new ChainAnswerError(json.error.data || json.error.message || 'RPC error')
+      // Albatross RPC wraps results as { data, metadata }.
+      return (json.result && 'data' in json.result ? json.result.data : json.result) as T
+    } catch (err) {
+      if (err instanceof ChainAnswerError) throw err
+      directOk = false // blocked or unreachable from the phone: use the relay from now on
+    }
   }
   if (!relayOk) throw new Error('No blockchain access')
   const q = new URLSearchParams({ a: 'rpc', m: method, net })
@@ -71,7 +88,7 @@ async function rpc<T>(method: string, params: string[], net: Net = defaultNet): 
   if (typeof json.error === 'string') throw new Error(json.message || json.error)
   if (json.error) {
     const e = json.error as { data?: string; message?: string }
-    throw new Error(e.data || e.message || 'RPC error')
+    throw new ChainAnswerError(e.data || e.message || 'RPC error')
   }
   return json.result as T
 }
@@ -91,11 +108,20 @@ export async function getStaker(address: string, net: Net = defaultNet): Promise
     const s = await rpc<Record<string, unknown> | null>('getStakerByAddress', [address.replace(/\s/g, '')], net)
     return normalizeStaker(address, s)
   } catch (e) {
-    const msg = String((e as Error).message || e).toLowerCase()
-    if (msg.includes('not found') || msg.includes('no staker') || msg.includes('does not exist'))
-      return normalizeStaker(address, null)
+    const msg = String((e as Error).message || e)
+    // The server answered that this address doesn't stake (Nimiq Pay's second address usually
+    // doesn't): that is a reading of zero, not a failure.
+    if (e instanceof ChainAnswerError && isNotAStaker(msg)) return normalizeStaker(address, null)
+    lastChainError = msg.slice(0, 160)
     return null
   }
+}
+
+/** Messages RPC servers use for "this address has no stake". */
+export function isNotAStaker(message: string): boolean {
+  // "Method not found" means the server can't answer at all: that is a failed read, never zero stake.
+  if (/method|rpc|internal|timeout|unavailable/i.test(message)) return false
+  return /not\s*found|no\s*staker|not\s*a\s*staker|does\s*not\s*exist|doesn't\s*exist|unknown\s*(staker|account)|no\s*such/i.test(message)
 }
 
 export function normalizeStaker(address: string, s: Record<string, unknown> | null): StakerInfo {
@@ -145,6 +171,8 @@ export interface Cheer {
   /** Block time (ms). */
   at: number
   hash: string
+  /** First 8 characters of the goal id the cheer was sent to, when the sender's link named one. */
+  goal?: string
 }
 
 /**
