@@ -60,7 +60,7 @@ export interface SyncedState {
   updatedAt: number
 }
 
-const stateKey = (address: string) => `st:${address.replace(/\s/g, '')}`
+export const stateKey = (address: string) => `st:${address.replace(/\s/g, '')}`
 const LOCKED_KEY = 'locked'
 /** address → number of active goals, for the public numbers. */
 const GOALS_KEY = 'goals'
@@ -152,7 +152,7 @@ export function cleanState(raw: unknown, owner: string, now: number): SyncedStat
   return { goals, stakerCreated: s.stakerCreated === true, ...wallet, accounts, network: cleanNet(s.network), updatedAt: now }
 }
 
-function readState(raw: unknown): SyncedState | null {
+export function readState(raw: unknown): SyncedState | null {
   if (typeof raw !== 'string') return null
   try {
     const s = JSON.parse(raw) as SyncedState

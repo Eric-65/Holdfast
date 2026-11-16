@@ -293,6 +293,12 @@ export function renderGoalDetail(root: HTMLElement, id: string): void {
 const savingsNow = (): Map<string, number> => goalSavings(ctx.state, ctx.stake ? ctx.stake.balance : null)
 const isLive = (): boolean => !!ctx.stake && walletBaselineKnown(ctx.state)
 
+// "Why?" next to "Network busy" shows the exact answer from the network (one listener for every screen).
+document.addEventListener('click', (e) => {
+  const why = (e.target as Element).closest?.('.btn-why') as HTMLElement | null
+  if (why) toast(`Network said: ${why.dataset.why}`, 'info')
+})
+
 /** Where the numbers come from, said plainly. */
 function sourceLine(): string {
   if (isLive()) return 'Live from the Nimiq blockchain'
@@ -334,7 +340,9 @@ function renderGoalsList(root: HTMLElement): void {
       <p class="eyebrow">My goals</p>
       <div class="big-amount">${nim(total)} <span class="muted">saved</span></div>
       ${fiatRow(total)}
-      <p class="muted small" title="${lastChainError}">${sourceLine()}</p>
+      <p class="muted small">${sourceLine()}${
+        !ctx.stake && lastChainError ? html` <button type="button" class="btn-why" data-why="${lastChainError}">Why?</button>` : ''
+      }</p>
     </section>
     <ul class="goal-list">
       ${goals.map((g) => {
@@ -536,7 +544,9 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
         }
         ${rewards > 0 ? html`<span class="chip chip-good">+${formatNim(rewards, { decimals: 2 })} NIM rewards</span>` : ''}
       </div>
-      <p class="muted small" title="${lastChainError}">${sourceLine()}</p>
+      <p class="muted small">${sourceLine()}${
+        !ctx.stake && lastChainError ? html` <button type="button" class="btn-why" data-why="${lastChainError}">Why?</button>` : ''
+      }</p>
     </section>
 
     ${goal.pendingUnlock ? unlockCard(goal) : ''}

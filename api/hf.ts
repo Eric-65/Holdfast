@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { cleanNet, fetchCheers, httpTransport, relay, rpcUrlFor, type RpcTransport } from './_lib/chain.js'
 import { ApiError, authenticate, claimInvite, createChallenge, inviteInfo, leaderboard, login, ownProfile, rateLimit, setName, type RequestContext } from './_lib/core.js'
-import { getState, publicGoal, publicStats, syncState } from './_lib/goals.js'
+import { getState, publicGoal, publicStats, readState, stateKey, syncState } from './_lib/goals.js'
+import { normalizeAddress } from './_lib/crypto.js'
 import { storeFromEnv, type Store } from './_lib/store.js'
 
 /**
@@ -104,16 +105,56 @@ export function createHandler(
         } catch (err) {
           chain = err instanceof Error ? err.message : 'no answer'
         }
-        // Optional: &addr=NQ... also reads that wallet's stake, the same way the goal screen does.
+        // Optional: &addr=NQ... also reads that wallet's stake, the same way the goal screen does,
+        // for every Nimiq Pay address in its backup, and looks up its last few lock transactions.
         let staker: unknown = undefined
+        let accounts: unknown = undefined
+        let locks: unknown = undefined
         const addr = url.searchParams.get('addr')
-        if (addr) {
+        const net = cleanNet(url.searchParams.get('net'))
+        const read = async (method: string, param: string) => {
           try {
-            const r = await relay(transport, { method: 'getStakerByAddress', param: addr, net: cleanNet(url.searchParams.get('net')) }, env)
+            const r = await relay(transport, { method, param, net }, env)
             const body = r.body as { result?: unknown; error?: { message?: string } }
-            staker = body.error ? { error: body.error.message ?? 'error' } : { result: body.result ?? null }
+            return body.error ? { error: body.error.message ?? 'error' } : { result: body.result ?? null }
           } catch (err) {
-            staker = { error: err instanceof Error ? err.message : 'no answer' }
+            return { error: err instanceof Error ? err.message : 'no answer' }
+          }
+        }
+        if (addr) {
+          staker = await read('getStakerByAddress', addr)
+          const owner = normalizeAddress(addr)
+          let saved: ReturnType<typeof readState> = null
+          if (owner && store) {
+            try {
+              saved = readState(await store.cmd('GET', stateKey(owner)))
+            } catch {
+              /* database unreachable: skip the backup part */
+            }
+          }
+          if (saved) {
+            accounts = await Promise.all(saved.accounts.map(async (a) => ({ address: a, staker: await read('getStakerByAddress', a) })))
+            const recent = saved.goals
+              .flatMap((g) => g.events.filter((e) => e.type === 'lock' && e.tx).map((e) => ({ goal: g.name, luna: e.luna, at: e.at, tx: e.tx! })))
+              .sort((a, b) => b.at - a.at)
+              .slice(0, 3)
+            locks = await Promise.all(
+              recent.map(async (l) => {
+                const t = await read('getTransactionByHash', l.tx)
+                const info = (t as { result?: Record<string, unknown> }).result
+                return {
+                  goal: l.goal,
+                  nim: l.luna / 100_000,
+                  at: new Date(l.at).toISOString(),
+                  hash: l.tx,
+                  ...(info
+                    ? { onChain: true, from: info.from, to: info.to, value: info.value, recipientData: info.recipientData, blockNumber: info.blockNumber }
+                    : { onChain: false, answer: t }),
+                }
+              }),
+            )
+          } else {
+            accounts = 'no backup for this address'
           }
         }
         return send(200, {
@@ -126,6 +167,8 @@ export function createHandler(
           // If set, the app calls this server straight from the phone, which most servers don't allow.
           directRpcFromPhone: env.VITE_NIMIQ_RPC_URL ? env.VITE_NIMIQ_RPC_URL : false,
           ...(staker !== undefined ? { staker } : {}),
+          ...(accounts !== undefined ? { accounts } : {}),
+          ...(locks !== undefined ? { locks } : {}),
         })
       }
 

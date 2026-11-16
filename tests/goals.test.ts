@@ -342,3 +342,28 @@ describe('chain diagnostics', () => {
     for (const m of ['Method not found', 'Internal error', 'timeout', 'RPC method getStakerByAddress not found']) expect(isNotAStaker(m)).toBe(false)
   })
 })
+
+describe('health check with a backup', () => {
+  it('reads every backed-up address and looks up the last lock transactions', async () => {
+    const me = newAddress()
+    const second = newAddress()
+    const tx = 'ab'.repeat(32)
+    await syncState(ctx(), me, { state: { goals: [goal({ events: [{ type: 'lock', luna: 50_00000, at: now, tx }] })], accounts: [me, second] } })
+    const handler = createHandler(
+      () => store,
+      async (_url, body: any) => {
+        if (body.method === 'getBlockNumber') return { result: 1 }
+        if (body.method === 'getStakerByAddress') return body.params[0] === second.replace(/\s/g, '') ? { result: { data: { balance: 50_00000 } } } : { error: { message: 'No staker with address' } }
+        return { result: { data: { from: me, to: 'NQ07 0000', value: 50_00000, blockNumber: 99 } } }
+      },
+      {},
+    )
+    const r = JSON.parse((await run(handler, `/api/hf?a=health&addr=${me.replace(/\s/g, '')}`)).body)
+    expect(r.staker).toEqual({ error: 'No staker with address' })
+    expect(r.accounts).toEqual([
+      { address: me, staker: { error: 'No staker with address' } },
+      { address: second, staker: { result: { balance: 50_00000 } } },
+    ])
+    expect(r.locks).toEqual([expect.objectContaining({ goal: 'Rent buffer', nim: 50, hash: tx, onChain: true, value: 50_00000, blockNumber: 99 })])
+  })
+})
