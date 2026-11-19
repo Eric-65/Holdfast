@@ -11,7 +11,7 @@ export const cleanNet = (v: unknown): Net => (v === 'testnet' ? 'testnet' : 'mai
 
 export function rpcUrlFor(net: Net, env: Record<string, string | undefined> = process.env): string {
   return net === 'testnet'
-    ? env.NIMIQ_TESTNET_RPC_URL || 'https://rpc.nimiq-testnet.com'
+    ? env.NIMIQ_TESTNET_RPC_URL || 'https://rpc.testnet.nimiqwatch.com'
     : env.NIMIQ_RPC_URL || 'https://rpc.nimiqwatch.com'
 }
 

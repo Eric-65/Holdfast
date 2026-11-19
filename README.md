@@ -159,7 +159,7 @@ Server settings (set on the host, not in `.env`):
 |---|---|
 | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | The Upstash Redis database that holds profiles and referrals. Vercel sets these for you when you connect the database (see [Deploy](#deploy)). `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` work too. |
 | `HF_REQUIRE_UNIQUE_DEVICE` | Set to `1` to count a referral only when the device and browser are new to Holdfast |
-| `NIMIQ_RPC_URL`, `NIMIQ_TESTNET_RPC_URL` | Nimiq RPC servers the relay reads from (server side). Default `https://rpc.nimiqwatch.com` and `https://rpc.nimiq-testnet.com`. To check one: `/api/hf?a=health&addr=<your NQ address>` shows the block number and your stake as that server reports it. |
+| `NIMIQ_RPC_URL`, `NIMIQ_TESTNET_RPC_URL` | Nimiq RPC servers the relay reads from (server side). Default `https://rpc.nimiqwatch.com` and `https://rpc.testnet.nimiqwatch.com` (testnet, the server Nimiq Pay uses for testnet Mini Apps). To check one: `/api/hf?a=health&addr=<your NQ address>` shows the block number and your stake as that server reports it. |
 
 ### Deploy
 

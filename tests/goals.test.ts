@@ -190,14 +190,14 @@ async function run(handler: ReturnType<typeof createHandler>, url: string) {
 describe('review fixes', () => {
   it('uses the default RPC servers and allows exactly the three read methods', async () => {
     expect(rpcUrlFor('mainnet', {})).toBe('https://rpc.nimiqwatch.com')
-    expect(rpcUrlFor('testnet', {})).toBe('https://rpc.nimiq-testnet.com')
+    expect(rpcUrlFor('testnet', {})).toBe('https://rpc.testnet.nimiqwatch.com')
     expect(rpcUrlFor('mainnet', { NIMIQ_RPC_URL: 'https://m.example' })).toBe('https://m.example')
     const seen: unknown[] = []
     const t: RpcTransport = async (url, body) => (seen.push([url, (body as any).method, (body as any).params]), { result: 1 })
     await relay(t, { method: 'getBlockNumber', param: null, net: 'testnet' }, {})
     await relay(t, { method: 'getTransactionByHash', param: 'AB'.repeat(32), net: 'mainnet' }, {})
     expect(seen).toEqual([
-      ['https://rpc.nimiq-testnet.com', 'getBlockNumber', []],
+      ['https://rpc.testnet.nimiqwatch.com', 'getBlockNumber', []],
       ['https://rpc.nimiqwatch.com', 'getTransactionByHash', ['ab'.repeat(32)]],
     ])
     for (const [m, p] of [['getTransactionByHash', 'abc'], ['getTransactionsByAddress', newAddress()], ['sendBasicTransaction', 'x'], [null, null]] as const)
