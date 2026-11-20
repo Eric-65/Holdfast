@@ -9,7 +9,7 @@ import { normalizeAddress } from './crypto.js'
  * staked in the saver's own wallet.
  */
 
-const EVENT_TYPES = new Set(['created', 'lock', 'unlock', 'retire', 'release', 'reached', 'shared'])
+const EVENT_TYPES = new Set(['created', 'lock', 'unlock', 'retire', 'release', 'reached', 'shared', 'rejected'])
 /** Goals kept per wallet (active plus the newest closed ones), and how many may be active at once. */
 const MAX_GOALS = 24
 const MAX_ACTIVE = 5

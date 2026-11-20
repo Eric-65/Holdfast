@@ -168,3 +168,25 @@ describe('readings taken before a transaction was included', () => {
     expect(readingShowsChange(1095.3 * NIM, unlock)).toBe(true)
   })
 })
+
+describe('locks the network refused', () => {
+  it('takes a refused lock off its goal and notes it', async () => {
+    const { rejectLock, confirmLock } = await import('../src/lib/store')
+    const fresh = createGoal({ name: 'x', emoji: '🎯', targetLuna: 100 * NIM, baselineLuna: 0, validator: null, now: T0 })
+    const g = recordLock(recordLock(fresh, 30 * NIM, 'aa'.repeat(32), T0), 10 * NIM, 'bb'.repeat(32), T0)
+    const r = rejectLock(g, 'aa'.repeat(32), LATER)
+    expect(r.lockedLuna).toBe(10 * NIM)
+    expect(r.events.filter((e) => e.type === 'lock').map((e) => e.tx)).toEqual(['bb'.repeat(32)])
+    expect(r.events.at(-1)).toMatchObject({ type: 'rejected', luna: 30 * NIM, tx: 'aa'.repeat(32) })
+    expect(rejectLock(r, 'aa'.repeat(32))).toBe(r) // already undone: no change
+    const c = confirmLock(r, 'bb'.repeat(32))
+    expect(c.events.find((e) => e.tx === 'bb'.repeat(32))!.ok).toBe(true)
+    expect(confirmLock(c, 'bb'.repeat(32))).toBe(c)
+  })
+
+  it('tells "not a staker" apart from a staker with zero stake', async () => {
+    const { normalizeStaker } = await import('../src/lib/chain')
+    expect(normalizeStaker('A', null).exists).toBe(false)
+    expect(normalizeStaker('A', { balance: 0, delegation: 'V' }).exists).toBe(true)
+  })
+})

@@ -196,10 +196,12 @@ describe('review fixes', () => {
     const t: RpcTransport = async (url, body) => (seen.push([url, (body as any).method, (body as any).params]), { result: 1 })
     await relay(t, { method: 'getBlockNumber', param: null, net: 'testnet' }, {})
     await relay(t, { method: 'getTransactionByHash', param: 'AB'.repeat(32), net: 'mainnet' }, {})
-    expect(seen).toEqual([
+    expect(seen.slice(0, 2)).toEqual([
       ['https://rpc.testnet.nimiqwatch.com', 'getBlockNumber', []],
       ['https://rpc.nimiqwatch.com', 'getTransactionByHash', ['ab'.repeat(32)]],
     ])
+    const v = await relay(t, { method: 'getActiveValidators', param: null, net: 'testnet' }, {})
+    expect(v.cacheS).toBe(300) // validator list for testnet, read-only
     for (const [m, p] of [['getTransactionByHash', 'abc'], ['getTransactionsByAddress', newAddress()], ['sendBasicTransaction', 'x'], [null, null]] as const)
       await expect(relay(t, { method: m, param: p, net: 'mainnet' }, {})).rejects.toMatchObject({ status: 400 })
   })

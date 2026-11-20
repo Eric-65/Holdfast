@@ -1,11 +1,13 @@
-import { ctx, commit, expectStakeChange, readLiveStake, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues } from '../app'
+import { ctx, clearExpectedStake, commit, expectStakeChange, readLiveStake, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues, verifyLocks } from '../app'
 import { backupNow } from '../account'
-import { chainAvailable, lastChainError, readFreshFor, type Cheer } from '../lib/chain'
+import { chainAvailable, getStaker, getTransactionOutcome, lastChainError, readFreshFor, type Cheer } from '../lib/chain'
 import { formatFiat, formatNim, formatAddress, isValidAddress, parseNimInput, pct, shortAddress, timeAgo, toLuna, toNim } from '../lib/format'
 import {
   activeGoals,
   checkpointRewards,
   closeGoalInState,
+  confirmLock,
+  rejectLock,
   startGoalWithdrawal,
   createGoal,
   goalSavings,
@@ -665,6 +667,7 @@ export function eventRow(e: GoalEvent): Raw {
     release: `↩️ ${formatNim(e.luna)} NIM back in wallet`,
     reached: `🎉 Goal reached`,
     shared: `🛡️ Goalkeeper link shared`,
+    rejected: `⚠️ Lock of ${formatNim(e.luna)} NIM refused by the network (nothing staked)`,
   }
   return html`<li class="ev ev-${e.type}"><span>${label[e.type]}</span><time class="muted small">${timeAgo(e.at)}</time></li>`
 }
@@ -672,48 +675,95 @@ export function eventRow(e: GoalEvent): Raw {
 async function lock(goal: Goal, luna: number): Promise<void> {
   const w = ctx.wallet
   if (!w) return
-  // Knowing whether this wallet already stakes decides which transaction Nimiq Pay is asked for.
-  if (!ctx.stake && chainAvailable()) await refreshChain()
-  const existingStaker =
-    ctx.state.stakerCreated || (ctx.stake ? ctx.stake.balance + ctx.stake.inactiveBalance + ctx.stake.retiredBalance > 0 : false)
+  // Nimiq has two staking transactions: one creates the staker (first time), one adds to an
+  // existing staker. Adding to a wallet that isn't a staker is refused by the network, so check
+  // first, fresh, and never guess.
+  readFreshFor(5_000)
+  const me = ctx.accounts[0] ? await getStaker(ctx.accounts[0]) : null
+  // If the network can't be read, locking still works: a lock the network has confirmed before
+  // proves the wallet is a staker. Without one, create the staker; if it already existed the
+  // network refuses that, the check below notices, and the NIM stays in the wallet.
+  const confirmedBefore = ctx.state.goals.some((g) => g.events.some((e) => e.type === 'lock' && e.ok))
+  const isStaker = me ? me.exists : confirmedBefore
   try {
     let tx: string
-    if (existingStaker) {
+    if (isStaker) {
       tx = await w.sendStakeTransaction({ value: luna })
     } else {
-      // A goal created before the validator list had loaded has no validator yet. Use the
-      // top-ranked one, which is also the form's default choice, and remember it on the goal.
-      // One wallet stakes with one validator; every goal uses it.
-      let validator = walletValidator() ?? goal.validator
+      // First stake: choose the validator. It must exist on the network the wallet runs on.
+      await loadValidators(true)
+      const known = new Set(ctx.validators.map((v) => v.address.replace(/\s/g, '').toUpperCase()))
+      const preferred = [goal.validator, walletValidator()].find((v) => v && known.has(v.replace(/\s/g, '').toUpperCase()))
+      const validator = preferred ?? (ctx.validators[0] ? formatAddress(ctx.validators[0].address) : null)
       if (!validator) {
-        await loadValidators(true)
-        validator = ctx.validators[0] ? formatAddress(ctx.validators[0].address) : null
-        if (!validator) {
-          toast("Couldn't load the validator list. Check your connection and try again.", 'error')
-          return
-        }
+        toast("Couldn't load the list of validators, so nothing was sent. Check your connection and try again.", 'error')
+        return
+      }
+      if (validator !== goal.validator) {
         const current = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
         commit(replaceGoal(ctx.state, { ...current, validator }))
       }
-      try {
-        tx = await w.sendNewStakerTransaction({ delegation: validator, value: luna })
-      } catch (err) {
-        // Already a staker (e.g. staked earlier in Nimiq Pay): add to the existing stake instead.
-        if (isUserRejection(err)) throw err
-        tx = await w.sendStakeTransaction({ value: luna })
-      }
+      tx = await w.sendNewStakerTransaction({ delegation: validator, value: luna })
     }
     const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
     // Record what every goal has earned so far first, so this lock doesn't move rewards between goals.
     const before = checkpointRewards(ctx.state, ctx.stake ? ctx.stake.balance : null)
     const current = before.goals.find((g) => g.id === goal.id) ?? latest
-    commit({ ...replaceGoal(before, recordLock(current, luna, tx)), stakerCreated: true })
+    commit(replaceGoal(before, recordLock(current, luna, tx)))
     expectStakeChange(luna)
-    toast(`Locked ${formatNim(luna)} NIM. Hold fast! 🔒`, 'success')
+    toast(`Sent ${formatNim(luna)} NIM to stake. Waiting for the network to confirm…`, 'info')
     afterTransaction()
+    void watchLock(tx, luna)
   } catch (err) {
     toast(isUserRejection(err) ? 'Cancelled' : `Could not lock: ${errorMessage(err)}`, isUserRejection(err) ? 'info' : 'error')
   }
+}
+
+/**
+ * When Holdfast opens: check recorded locks against the chain, and explain once if any were
+ * refused by the network (they are taken off the goals; nothing was staked).
+ */
+export async function checkLocksOnOpen(): Promise<void> {
+  const fixed = await verifyLocks()
+  if (!fixed.count) return
+  // Don't stack on top of another sheet (the profile welcome, say): wait until it's closed.
+  for (let i = 0; i < 600 && document.querySelector('.sheet-backdrop'); i++) await new Promise((r) => setTimeout(r, 500))
+  openSheet(
+    html`<h2>We corrected your goals</h2>
+      <p>${fixed.count === 1 ? 'One lock' : `${fixed.count} locks`} totalling <b>${formatNim(fixed.luna)} NIM</b> reached the Nimiq network
+        but ${fixed.count === 1 ? 'was' : 'were'} refused, so nothing was staked. Holdfast had counted ${fixed.count === 1 ? 'it' : 'them'} anyway.</p>
+      <p><b>Your NIM is safe:</b> a refused transaction leaves the amount in your wallet; only the small network fee is spent.</p>
+      <p class="muted small">The cause is fixed: Holdfast now checks your wallet before each lock and confirms every lock on the network.
+        You can lock again from any goal.</p>
+      <button class="btn btn-primary" id="ok-fixed">OK</button>`,
+    (sheet, close) => $('#ok-fixed', sheet)!.addEventListener('click', close),
+  )
+}
+
+/** Follow one lock until the network confirms it or refuses it (about two minutes at most). */
+async function watchLock(tx: string, luna: number): Promise<void> {
+  for (let i = 0; i < 24; i++) {
+    await new Promise((r) => setTimeout(r, 5000))
+    const outcome = await getTransactionOutcome(tx)
+    if (!outcome || !outcome.found) continue
+    if (outcome.executed === false) {
+      const goal = ctx.state.goals.find((g) => g.events.some((e) => e.type === 'lock' && e.tx === tx))
+      if (goal) commit(replaceGoal(ctx.state, rejectLock(goal, tx)))
+      clearExpectedStake()
+      void refreshChain()
+      toast(`The network refused this lock, so nothing was staked. Your ${formatNim(luna)} NIM is still in your wallet.`, 'error')
+      return
+    }
+    // Included and not refused: confirm once the stake shows it (or the server says it executed).
+    const fresh = await readLiveStake()
+    if (outcome.executed === true || (fresh && fresh.exists)) {
+      const goal = ctx.state.goals.find((g) => g.events.some((e) => e.type === 'lock' && e.tx === tx))
+      if (goal) commit({ ...replaceGoal(ctx.state, confirmLock(goal, tx)), stakerCreated: true })
+      toast(`Locked ${formatNim(luna)} NIM. Hold fast! 🔒`, 'success')
+      return
+    }
+  }
+  // Still unknown: the check that runs when Holdfast opens will settle it.
 }
 
 /** Re-read stake and balance a little after a transaction, skipping cached readings. */

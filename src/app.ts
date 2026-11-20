@@ -1,6 +1,6 @@
-import { getStakeTotals, fetchCheers, fetchValidators, chainAvailable, readFreshFor, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
+import { getActiveValidatorAddresses, getStakeTotals, getTransactionOutcome, fetchCheers, fetchValidators, chainAvailable, readFreshFor, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
 import { getPrices, type PriceState } from './lib/prices'
-import { loadState, saveState, withWalletBaseline, type StoreState } from './lib/store'
+import { confirmLock, loadState, rejectLock, replaceGoal, saveState, SETTLE_MS, withWalletBaseline, type StoreState } from './lib/store'
 import { hostFiat, hostNetwork, type Wallet } from './lib/wallet'
 import { toNim } from './lib/format'
 import type { OwnProfile, PublicStats } from './lib/api'
@@ -129,6 +129,11 @@ export function expectStakeChange(delta: number): void {
   emit()
 }
 
+/** Stop waiting for a change (the transaction was refused). */
+export function clearExpectedStake(): void {
+  expected = null
+}
+
 /** Whether a reading already includes the change we're waiting for (rewards only ever add a little). */
 export function readingShowsChange(reading: number, exp: { balance: number; dir: 1 | -1 }): boolean {
   return exp.dir > 0 ? reading >= exp.balance - 1 : reading <= exp.balance + LUNA_PER_NIM
@@ -209,6 +214,58 @@ export async function refreshBalance(changed = false): Promise<void> {
   }
 }
 
+/**
+ * Check recorded locks against the chain. A lock the network refused (included but failed) is
+ * taken off its goal, since nothing was staked. If no address of this wallet is a staker at all,
+ * no settled lock can have gone through, whatever the server says about single transactions.
+ * Returns the locks undone in this run.
+ */
+let verifying = false
+export async function verifyLocks(): Promise<{ count: number; luna: number }> {
+  const none = { count: 0, luna: 0 }
+  if (verifying || !ctx.wallet || !chainAvailable()) return none
+  verifying = true
+  try {
+    const now = Date.now()
+    const pending = ctx.state.goals
+      .filter((g) => g.status === 'active')
+      .flatMap((g) => g.events.filter((e) => e.type === 'lock' && e.tx && !e.ok).map((e) => ({ goal: g.id, tx: e.tx!, at: e.at })))
+      .slice(-10)
+    if (!pending.length) return none
+    const stake = await getStakeTotals(ctx.accounts)
+    let state = ctx.state
+    let count = 0
+    let luna = 0
+    for (const p of pending) {
+      const outcome = await getTransactionOutcome(p.tx)
+      if (!outcome) continue // network unreachable: try again later
+      const goal = state.goals.find((g) => g.id === p.goal)
+      if (!goal) continue
+      const settled = now - p.at > SETTLE_MS
+      // A goal that has since been withdrawn can leave the wallet with no staker; that proves nothing.
+      const withdrawnSince = goal.events.some((e) => (e.type === 'unlock' || e.type === 'release') && e.at >= p.at) || !!goal.pendingUnlock
+      const refused = outcome.executed === false || (settled && outcome.found && stake !== null && !stake.exists && !withdrawnSince)
+      if (refused) {
+        const event = goal.events.find((e) => e.type === 'lock' && e.tx === p.tx)
+        count++
+        luna += event?.luna ?? 0
+        state = replaceGoal(state, rejectLock(goal, p.tx, now))
+      } else if (outcome.found && (outcome.executed === true || stake?.exists)) {
+        state = replaceGoal(state, confirmLock(goal, p.tx))
+        state = { ...state, stakerCreated: true }
+      }
+    }
+    if (state !== ctx.state) {
+      // Undone locks change what belongs to which goal: read the wallet baseline again.
+      if (count) state = { ...state, walletBaselineFromChain: false, walletBaselineLuna: 0 }
+      commit(state, { quiet: true })
+    }
+    return { count, luna }
+  } finally {
+    verifying = false
+  }
+}
+
 export async function refreshPrices(): Promise<void> {
   ctx.prices = await getPrices()
   emit()
@@ -217,7 +274,19 @@ export async function refreshPrices(): Promise<void> {
 /** `retry` asks again when an earlier attempt came back empty (for example while offline). */
 export async function loadValidators(retry = false): Promise<void> {
   if (ctx.validatorsLoaded && !(retry && !ctx.validators.length)) return
-  ctx.validators = await fetchValidators()
+  // The validators API lists mainnet validators only. On testnet, ask the testnet itself, so a new
+  // staker is never delegated to a validator that doesn't exist there.
+  ctx.validators =
+    hostNetwork() === 'testnet'
+      ? (await getActiveValidatorAddresses('testnet')).map((address) => ({
+          address,
+          name: `Testnet validator ${address.replace(/\s/g, '').slice(-4)}`,
+          fee: null,
+          payoutType: null,
+          score: null,
+          logo: null,
+        }))
+      : await fetchValidators()
   ctx.validatorsLoaded = true
   emit()
 }

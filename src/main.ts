@@ -8,7 +8,7 @@ import { connectNimiqPay, errorMessage, insideNimiqPay, isUserRejection } from '
 import { html, toast } from './ui'
 import { header } from './views/common'
 import { renderKeeper } from './views/keeper'
-import { renderConnectFailed, renderConnecting, renderGoalDetail, renderHome, renderLanding, renderNewGoalScreen } from './views/saver'
+import { checkLocksOnOpen, renderConnectFailed, renderConnecting, renderGoalDetail, renderHome, renderLanding, renderNewGoalScreen } from './views/saver'
 import { openWelcomeSheet, renderBoard, renderProfile, tabBar } from './views/social'
 
 const root = document.getElementById('app')!
@@ -156,6 +156,7 @@ async function connect(): Promise<void> {
     if (ctx.wallet) return
     await attachWallet(wallet)
     void startAccount()
+    void checkLocksOnOpen()
   } catch (err) {
     fail(
       isUserRejection(err)
@@ -210,6 +211,7 @@ document.addEventListener('visibilitychange', () => {
     void refreshPrices()
     void refreshCheers()
     void refreshProfile(15_000)
+    void checkLocksOnOpen()
   }
 })
 

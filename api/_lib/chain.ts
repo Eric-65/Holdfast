@@ -72,6 +72,8 @@ const METHODS: Record<string, { param: (p: string | null) => unknown[] | null; c
     cacheS: 10,
   },
   getTransactionByHash: { param: (p) => (p && /^[0-9a-f]{64}$/i.test(p) ? [p.toLowerCase()] : null), cacheS: 30 },
+  // The validators a new staker can delegate to (used on testnet, where the validators API has none).
+  getActiveValidators: { param: () => [], cacheS: 300 },
 }
 
 export interface RelayRequest {

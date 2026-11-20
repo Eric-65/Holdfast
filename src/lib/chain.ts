@@ -8,6 +8,8 @@ export interface StakerInfo {
   inactiveBalance: number
   inactiveFrom: number | null
   retiredBalance: number
+  /** Whether the address is a staker at all (a staker must exist before stake can be added). */
+  exists: boolean
 }
 
 export interface Validator {
@@ -133,6 +135,7 @@ export function normalizeStaker(address: string, s: Record<string, unknown> | nu
     inactiveBalance: n(s?.inactiveBalance),
     inactiveFrom: typeof s?.inactiveFrom === 'number' ? (s.inactiveFrom as number) : null,
     retiredBalance: n(s?.retiredBalance),
+    exists: s !== null && typeof s === 'object',
   }
 }
 
@@ -151,6 +154,40 @@ export async function getStakeTotals(addresses: string[], net: Net = defaultNet)
     balance: all.reduce((a, s) => a + s.balance, 0),
     inactiveBalance: all.reduce((a, s) => a + s.inactiveBalance, 0),
     retiredBalance: all.reduce((a, s) => a + s.retiredBalance, 0),
+    exists: all.some((s) => s.exists),
+  }
+}
+
+/**
+ * What the network says about a transaction. `found: false` = not on the chain (yet).
+ * `executed: false` = included, but the network refused it, so nothing happened except the fee.
+ * `executed: null` = the server didn't say. null overall = the network couldn't be asked.
+ */
+export async function getTransactionOutcome(hash: string, net: Net = defaultNet): Promise<{ found: boolean; executed: boolean | null } | null> {
+  if (!chainAvailable() || !/^[0-9a-f]{64}$/i.test(hash)) return null
+  try {
+    const t = await rpc<Record<string, unknown> | null>('getTransactionByHash', [hash.toLowerCase()], net)
+    if (!t) return { found: false, executed: null }
+    return { found: true, executed: typeof t.executionResult === 'boolean' ? t.executionResult : null }
+  } catch (e) {
+    if (e instanceof ChainAnswerError && /not\s*found/i.test(String((e as Error).message))) return { found: false, executed: null }
+    return null
+  }
+}
+
+/** Addresses of the validators a new staker can delegate to, straight from the network. */
+export async function getActiveValidatorAddresses(net: Net = defaultNet): Promise<string[]> {
+  if (!chainAvailable()) return []
+  try {
+    const list = await rpc<unknown>('getActiveValidators', [], net)
+    const out: string[] = []
+    for (const v of Array.isArray(list) ? list : []) {
+      const a = typeof v === 'string' ? v : (v as { address?: unknown })?.address
+      if (typeof a === 'string') out.push(a)
+    }
+    return out
+  } catch {
+    return []
   }
 }
 

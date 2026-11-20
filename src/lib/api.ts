@@ -44,7 +44,7 @@ export interface SyncedGoal {
   pendingUnlock: { luna: number; step: 'inactive' | 'retired'; startedAt: number } | null
   validator: string | null
   baselineFromChain?: boolean
-  events: { type: 'created' | 'lock' | 'unlock' | 'retire' | 'release' | 'reached' | 'shared'; luna: number; at: number; tx?: string }[]
+  events: { type: 'created' | 'lock' | 'unlock' | 'retire' | 'release' | 'reached' | 'shared' | 'rejected'; luna: number; at: number; tx?: string }[]
 }
 
 export interface SyncedState {

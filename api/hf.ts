@@ -148,7 +148,17 @@ export function createHandler(
                   at: new Date(l.at).toISOString(),
                   hash: l.tx,
                   ...(info
-                    ? { onChain: true, from: info.from, to: info.to, value: info.value, recipientData: info.recipientData, blockNumber: info.blockNumber }
+                    ? {
+                        onChain: true,
+                        // false: the network included the transaction but refused it (nothing was staked).
+                        executionResult: info.executionResult ?? null,
+                        from: info.from,
+                        to: info.to,
+                        value: info.value,
+                        fee: info.fee,
+                        recipientData: info.recipientData,
+                        blockNumber: info.blockNumber,
+                      }
                     : { onChain: false, answer: t }),
                 }
               }),
