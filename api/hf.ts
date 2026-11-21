@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { cleanNet, fetchCheers, httpTransport, relay, rpcUrlFor, type RpcTransport } from './_lib/chain.js'
+import { cleanNet, fetchCheers, httpTransport, relay, rpcUrlFor, stakedOnChain, type RpcTransport } from './_lib/chain.js'
 import { ApiError, authenticate, claimInvite, createChallenge, inviteInfo, leaderboard, login, ownProfile, rateLimit, setName, type RequestContext } from './_lib/core.js'
 import { getState, publicGoal, publicStats, readState, stateKey, syncState } from './_lib/goals.js'
 import { normalizeAddress } from './_lib/crypto.js'
@@ -205,7 +205,7 @@ export function createHandler(
 
       if (req.method === 'GET') {
         if (action === 'leaderboard') return send(200, await leaderboard(ctx), 'public, s-maxage=10, max-age=5')
-        if (action === 'stats') return send(200, await publicStats(ctx), 'public, s-maxage=30, max-age=15')
+        if (action === 'stats') return send(200, await publicStats(ctx, (accounts, net) => stakedOnChain(transport, accounts, net, env)), 'public, s-maxage=30, max-age=15')
         if (action === 'invite') return send(200, await inviteInfo(ctx, url.searchParams.get('code')))
         if (action === 'goal') return send(200, await publicGoal(ctx, url.searchParams.get('addr'), url.searchParams.get('id')), 'public, s-maxage=5, max-age=5')
         if (action === 'me') return send(200, { profile: await ownProfile(ctx, await signedIn()) })

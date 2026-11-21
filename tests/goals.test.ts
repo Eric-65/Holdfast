@@ -102,6 +102,35 @@ describe('goal backup', () => {
     await syncState(ctx(), b, { state: { goals: [goal({ status: 'completed' })] } })
     expect(await publicStats(ctx())).toEqual({ savers: 3, activeGoals: 1, lockedLuna: 50_00000 })
   })
+
+  it('counts only NIM the blockchain confirms as staked', async () => {
+    const [a, b, c] = [newAddress(), newAddress(), newAddress()]
+    // a: really staked more than its goals; b: its locks were refused (no staker); c: chain unreadable.
+    const chain = new Map<string, number | null>([[a, 80_00000], [b, 0], [c, null]])
+    let reads = 0
+    const readStake = async (accounts: string[]) => {
+      reads++
+      const v = chain.get(accounts[0]!)
+      return v === undefined ? 0 : v
+    }
+    await syncState(ctx(), a, { state: { goals: [goal()], accounts: [a] } })
+    await syncState(ctx(), b, { state: { goals: [goal({ lockedLuna: 220_010_00000 })], accounts: [b], network: 'testnet' } })
+    await syncState(ctx(), c, { state: { goals: [goal({ lockedLuna: 7_00000 })], accounts: [c] } })
+    expect(await publicStats(ctx(), readStake)).toMatchObject({ activeGoals: 3, lockedLuna: 50_00000 })
+    expect(reads).toBe(3)
+    // Within two minutes the confirmed amounts are reused; c is still unconfirmed, so read again.
+    expect(await publicStats(ctx(), readStake)).toMatchObject({ lockedLuna: 50_00000 })
+    expect(reads).toBe(4)
+    // c becomes readable; b stakes 30 NIM for real.
+    chain.set(c, 7_00000)
+    chain.set(b, 30_00000)
+    now += 3 * 60_000
+    expect(await publicStats(ctx(), readStake)).toMatchObject({ lockedLuna: 87_00000 })
+    // A new backup makes that saver count again only once the blockchain confirms it.
+    chain.set(a, null)
+    await syncState(ctx(), a, { state: { goals: [goal({ lockedLuna: 60_00000 })], accounts: [a] } })
+    expect(await publicStats(ctx(), readStake)).toMatchObject({ lockedLuna: 87_00000 })
+  })
 })
 
 describe('blockchain relay', () => {

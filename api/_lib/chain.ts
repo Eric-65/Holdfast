@@ -193,3 +193,34 @@ export async function fetchCheers(
   }
   return { cheers: parseCheers(address, txs).slice(0, 50) }
 }
+
+/**
+ * Everything staked by these addresses right now (active, inactive and retired), in luna, read
+ * from the blockchain. An address with no staker counts as 0. Null when any read fails.
+ */
+export async function stakedOnChain(
+  transport: RpcTransport,
+  accounts: string[],
+  net: Net,
+  env: Record<string, string | undefined> = process.env,
+): Promise<number | null> {
+  const url = rpcUrlFor(net, env)
+  try {
+    const each = await Promise.all(
+      accounts.map(async (a) => {
+        try {
+          const s = await callRpc<Record<string, unknown> | null>(transport, url, 'getStakerByAddress', [compact(a)])
+          if (!s) return 0
+          const n = (k: string) => (typeof s[k] === 'number' && Number.isFinite(s[k]) ? (s[k] as number) : 0)
+          return n('balance') + n('inactiveBalance') + n('retiredBalance')
+        } catch (err) {
+          if (err instanceof RpcError && /no staker/i.test(err.message)) return 0
+          throw err
+        }
+      }),
+    )
+    return each.reduce((a, n) => a + n, 0)
+  } catch {
+    return null
+  }
+}

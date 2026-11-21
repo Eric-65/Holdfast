@@ -64,6 +64,16 @@ export const stateKey = (address: string) => `st:${address.replace(/\s/g, '')}`
 const LOCKED_KEY = 'locked'
 /** address → number of active goals, for the public numbers. */
 const GOALS_KEY = 'goals'
+/** address → the part of its locked amount the blockchain confirms, and when that was checked. */
+const CHAIN_KEY = 'lockedChain'
+const CHAIN_AT_KEY = 'lockedChainAt'
+/** How long a confirmed amount is trusted before it is read from the blockchain again. */
+const CHAIN_TTL_MS = 2 * 60_000
+/** Savers re-checked per stats request, so one request never waits on many reads. */
+const CHAIN_BATCH = 10
+
+/** Reads what a saver has staked on the blockchain (all their addresses); null if it can't. */
+export type StakeReader = (accounts: string[], net: Net) => Promise<number | null>
 
 const bad = (what: string): never => {
   throw new ApiError(400, 'bad_goal', `Goal data is malformed (${what}).`)
@@ -173,6 +183,8 @@ export async function syncState(ctx: RequestContext, address: string, body: { st
     ['SET', stateKey(address), JSON.stringify(state)],
     active.length ? ['HSET', LOCKED_KEY, member, locked] : ['HDEL', LOCKED_KEY, member],
     active.length ? ['HSET', GOALS_KEY, member, active.length] : ['HDEL', GOALS_KEY, member],
+    // Check this saver against the blockchain again on the next stats request.
+    ['HDEL', CHAIN_AT_KEY, member],
   ])
   return { updatedAt: state.updatedAt }
 }
@@ -228,12 +240,22 @@ export async function publicGoal(ctx: RequestContext, rawAddress: unknown, rawId
   }
 }
 
-/** Public numbers that show Holdfast is in real use. */
-export async function publicStats(ctx: RequestContext): Promise<{ savers: number; activeGoals: number; lockedLuna: number }> {
-  const [users, locked, goals] = await ctx.store.pipeline([
+/**
+ * Public numbers that show Holdfast is in real use. "NIM locked" counts only what the blockchain
+ * confirms: each saver's goals count up to what their addresses really have staked, so a lock the
+ * network refused (or a phone reporting a wrong amount) adds nothing. Without `readStake` (tests,
+ * or no chain access configured) the goals' own records are used.
+ */
+export async function publicStats(
+  ctx: RequestContext,
+  readStake?: StakeReader,
+): Promise<{ savers: number; activeGoals: number; lockedLuna: number }> {
+  const [users, locked, goals, chain, chainAt] = await ctx.store.pipeline([
     ['GET', 'stats:users'],
     ['HGETALL', LOCKED_KEY],
     ['HGETALL', GOALS_KEY],
+    ['HGETALL', CHAIN_KEY],
+    ['HGETALL', CHAIN_AT_KEY],
   ])
   const asMap = (flat: unknown): Map<string, number> => {
     const m = new Map<string, number>()
@@ -249,9 +271,41 @@ export async function publicStats(ctx: RequestContext): Promise<{ savers: number
   // Backups from before several goals were possible have a locked amount but no goal count: one goal.
   let activeGoals = 0
   for (const member of lockedBy.keys()) activeGoals += goalsBy.get(member) ?? 1
-  return {
-    savers: Number(users) || 0,
-    activeGoals,
-    lockedLuna: [...lockedBy.values()].reduce((a, n) => a + n, 0),
+  const stats = (lockedLuna: number) => ({ savers: Number(users) || 0, activeGoals, lockedLuna })
+  if (!readStake) return stats([...lockedBy.values()].reduce((a, n) => a + n, 0))
+
+  const confirmed = asMap(chain)
+  const checkedAt = asMap(chainAt)
+  const due = [...lockedBy.keys()]
+    .filter((m) => ctx.now - (checkedAt.get(m) ?? 0) > CHAIN_TTL_MS)
+    .sort((a, b) => (checkedAt.get(a) ?? 0) - (checkedAt.get(b) ?? 0))
+    .slice(0, CHAIN_BATCH)
+  if (due.length) {
+    const states = await ctx.store.pipeline(due.map((m) => ['GET', stateKey(m)]))
+    const results = await Promise.all(
+      due.map(async (member, i) => {
+        const state = readState(states[i])
+        const staked = state ? await readStake(state.accounts, state.network) : 0
+        // Couldn't read the blockchain: keep the last confirmed amount and try again next time.
+        if (staked === null) return null
+        return { member, luna: Math.min(lockedBy.get(member) ?? 0, staked) }
+      }),
+    )
+    const writes: (string | number)[][] = []
+    for (const r of results) {
+      if (!r) continue
+      confirmed.set(r.member, r.luna)
+      writes.push(['HSET', CHAIN_KEY, r.member, r.luna], ['HSET', CHAIN_AT_KEY, r.member, ctx.now])
+    }
+    if (writes.length) {
+      try {
+        await ctx.store.pipeline(writes)
+      } catch {
+        /* not saved: checked again on the next request */
+      }
+    }
   }
+  let lockedLuna = 0
+  for (const member of lockedBy.keys()) lockedLuna += Math.min(lockedBy.get(member)!, confirmed.get(member) ?? 0)
+  return stats(lockedLuna)
 }
