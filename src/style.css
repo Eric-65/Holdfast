@@ -346,6 +346,7 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 }
 .stats-label { font-size: 0.74rem; font-weight: 700; color: var(--muted); line-height: 1.2; }
 .hero.small .stats-strip { margin-top: 16px; }
+.stats-note { margin: 8px 0 0; font-size: 0.78rem; color: var(--muted); text-align: center; }
 
 /* Cheers received, read from the blockchain. */
 .chip-muted { background: var(--line); color: var(--ink-2); }

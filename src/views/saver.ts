@@ -119,7 +119,8 @@ export function statsStrip(): Raw {
     ${tile(compactNumber(st.savers), st.savers === 1 ? 'saver' : 'savers', `${st.savers.toLocaleString('en-US')} savers`)}
     ${tile(compactNumber(st.activeGoals), st.activeGoals === 1 ? 'active goal' : 'active goals', `${st.activeGoals.toLocaleString('en-US')} active goals`)}
     ${tile(compactNumber(nim), 'NIM locked', `${nim.toLocaleString('en-US')} NIM locked`)}
-  </ul>`
+  </ul>
+  <p class="stats-note">Totals for all savers · NIM locked is checked on-chain</p>`
 }
 
 export function renderLanding(root: HTMLElement): void {
