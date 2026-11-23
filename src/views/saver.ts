@@ -726,7 +726,7 @@ async function lock(goal: Goal, luna: number): Promise<void> {
     afterTransaction()
     void watchLock(tx, luna)
   } catch (err) {
-    toast(isUserRejection(err) ? 'Cancelled' : `Could not lock: ${errorMessage(err)}`, isUserRejection(err) ? 'info' : 'error')
+    toast(isUserRejection(err) ? 'Cancelled' : (walletBusy(err) ?? `Could not lock: ${errorMessage(err)}`), isUserRejection(err) ? 'info' : 'error')
   }
 }
 
@@ -944,7 +944,7 @@ async function startUnlock(goal: Goal, luna: number): Promise<boolean> {
     afterTransaction()
     return true
   } catch (err) {
-    toast(isUserRejection(err) ? 'Cancelled. Still sealed 🔒' : `Could not unlock: ${errorMessage(err)}`, isUserRejection(err) ? 'info' : 'error')
+    toast(isUserRejection(err) ? 'Cancelled. Still sealed 🔒' : (walletBusy(err) ?? `Could not unlock: ${errorMessage(err)}`), isUserRejection(err) ? 'info' : 'error')
     return false
   }
 }
@@ -1027,13 +1027,18 @@ async function watchStep(goalId: string, kind: 'retire' | 'remove', tx: string):
   }
 }
 
-/** Nimiq Pay sends one transaction at a time; say so plainly instead of blaming the cool-down. */
+/**
+ * Nimiq Pay sends one transaction at a time per wallet. When this wallet's previous one is still
+ * unresolved, say so plainly: it only affects this wallet, and nothing was sent.
+ */
+function walletBusy(err: unknown): string | null {
+  return /still pending|pending transaction/i.test(errorMessage(err))
+    ? 'Your wallet is still waiting on its previous transaction, so nothing was sent and your NIM is untouched. Nimiq Pay sends one transaction at a time per wallet; try again once that one has gone through or expired (at most about 2 hours).'
+    : null
+}
+
 function stepError(err: unknown): string {
-  const msg = errorMessage(err).replace(/\.+\s*$/, '')
-  if (/still pending|pending transaction/i.test(msg)) {
-    return 'Nimiq Pay is still waiting on your previous transaction. Try again once it has gone through or expired (at most about 2 hours).'
-  }
-  return `Not yet: ${msg}.`
+  return walletBusy(err) ?? `Not yet: ${errorMessage(err).replace(/\.+\s*$/, '')}.`
 }
 
 function bindUnlockCard(root: HTMLElement, goal: Goal): void {
