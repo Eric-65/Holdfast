@@ -1,4 +1,4 @@
-import { ctx, clearExpectedStake, commit, expectStakeChange, readLiveStake, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues, verifyLocks } from '../app'
+import { ctx, clearExpectedStake, commit, emit, estimatedBlock, expectStakeChange, readLiveStake, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues, verifyLocks } from '../app'
 import { backupNow } from '../account'
 import { chainAvailable, getStaker, getTransactionOutcome, lastChainError, readFreshFor, type Cheer } from '../lib/chain'
 import { formatFiat, formatNim, formatAddress, isValidAddress, parseNimInput, pct, shortAddress, timeAgo, toLuna, toNim } from '../lib/format'
@@ -19,6 +19,7 @@ import {
   recordRelease,
   recordRetire,
   replaceGoal,
+  retireReadyBlock,
   type Goal,
   type GoalEvent,
 } from '../lib/store'
@@ -80,7 +81,7 @@ const FAQ: [string, string][] = [
   ],
   [
     'Can I take my money out?',
-    'Always. Tap Break the seal, type the goal name to confirm, and Holdfast walks you through the three unstaking steps. The Nimiq network adds a cool-down before the NIM is back in your balance, and your Goalkeeper sees that you withdrew.',
+    'Always. Tap Break the seal, type the goal name to confirm, and Holdfast walks you through the three unstaking steps. The Nimiq network adds a cool-down of 12 to 24 hours before the NIM is back in your balance, and your Goalkeeper sees that you withdrew.',
   ],
   [
     'What does my Goalkeeper see?',
@@ -875,7 +876,7 @@ async function breakSeal(goal: Goal): Promise<void> {
       <p>You're <b>${Math.floor(pct(currentSaved(goal), goal.targetLuna))}%</b> of the way to <b>${goal.emoji} ${goal.name}</b>.
       Withdrawing stops rewards on that NIM and your Goalkeeper will see it.</p>
       <p class="muted small">Unstaking on Nimiq takes three steps: deactivate now, then after the network's cool-down
-        retire it, then return it to your wallet. Holdfast walks you through each one.</p>
+        (12 to 24 hours) retire it, then return it to your wallet. Holdfast walks you through each one.</p>
       <form id="unlock-form" class="form" novalidate>
         <label>Amount to withdraw
           <div class="amount-input"><input name="amount" inputmode="decimal" value="${toNim(max)}"/><span class="unit">NIM</span></div>
@@ -939,9 +940,42 @@ async function startUnlock(goal: Goal, luna: number): Promise<boolean> {
   }
 }
 
+/** Withdrawal steps sent but not yet confirmed, by goal id (only for this visit). */
+const stepInFlight = new Map<string, { kind: 'retire' | 'remove'; tx: string }>()
+
+/** "13 h 20 min", "45 min", "under a minute". */
+function roughDuration(seconds: number): string {
+  if (seconds < 60) return 'under a minute'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.ceil((seconds % 3600) / 60)
+  if (!h) return `${m} min`
+  return m === 60 ? `${h + 1} h` : m ? `${h} h ${m} min` : `${h} h`
+}
+
+/** Seconds until the deactivated stake can be retired: 0 = now, null = can't tell from here. */
+function coolDownLeft(): number | null {
+  const ready = retireReadyBlock(ctx.stake?.inactiveFrom ?? null)
+  const block = estimatedBlock()
+  if (ready === null || block === null || !ctx.stake || ctx.stake.inactiveBalance <= 0) return null
+  return Math.max(0, ready - block)
+}
+
 function unlockCard(goal: Goal): Raw {
   const p = goal.pendingUnlock!
   const step = p.step === 'inactive' ? 2 : 3
+  const sending = stepInFlight.get(goal.id)
+  const left = step === 2 ? coolDownLeft() : 0
+  const waiting = step === 2 && left !== null && left > 0
+  const note = sending
+    ? 'Sent. Waiting for the network to confirm it…'
+    : step === 3
+      ? 'Last step: move the NIM back to your spendable balance.'
+      : waiting
+        ? `Cool-down: ready in about ${roughDuration(left!)}. The Nimiq network keeps deactivated stake locked for one epoch (about 12 hours) after the deactivation takes effect, so a withdrawal takes 12 to 24 hours in total. Your NIM is safe meanwhile.`
+        : left === 0
+          ? 'The cool-down is over. Retire the stake, then return it to your wallet.'
+          : 'The Nimiq network keeps deactivated stake locked for 12 to 24 hours. If Nimiq Pay or the network refuses the retire step, the cool-down is still running: try again later.'
+  const label = sending ? 'Waiting for the network…' : waiting ? 'Cooling down…' : step === 2 ? 'Retire stake' : 'Return NIM to wallet'
   return html`<section class="card unlock-card">
     <h3>Withdrawal in progress</h3>
     <ol class="steps">
@@ -949,39 +983,69 @@ function unlockCard(goal: Goal): Raw {
       <li class="${step === 2 ? 'current' : 'done'}">Retire after the cool-down</li>
       <li class="${step === 3 ? 'current' : ''}">Return to wallet</li>
     </ol>
-    <p class="muted small">Started ${timeAgo(p.startedAt)}. ${
-      step === 2
-        ? 'Stake can only be retired once the network cool-down (end of the current epoch plus a reporting window) has passed. If Nimiq Pay rejects it, try again later.'
-        : 'Last step: move the NIM back to your spendable balance.'
-    }</p>
-    <button class="btn btn-secondary" id="unlock-next">${step === 2 ? 'Retire stake' : 'Return NIM to wallet'}</button>
+    <p class="muted small">Started ${timeAgo(p.startedAt)}. ${note}</p>
+    <button class="btn btn-secondary" id="unlock-next" ${sending || waiting ? 'disabled' : ''}>${label}</button>
   </section>`
+}
+
+/** Watch a retire or return transaction: record it once the network confirms, explain a refusal. */
+async function watchStep(goalId: string, kind: 'retire' | 'remove', tx: string): Promise<void> {
+  try {
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 5000))
+      const outcome = await getTransactionOutcome(tx)
+      if (!outcome || !outcome.found) continue
+      if (outcome.executed === false) {
+        toast(
+          kind === 'retire'
+            ? "The network refused the retire step: the cool-down hasn't ended yet. Nothing changed and your NIM is safe."
+            : 'The network refused this step. Nothing changed and your NIM is safe. Try again in a moment.',
+          'error',
+        )
+        return
+      }
+      if (outcome.executed === true) {
+        const goal = ctx.state.goals.find((g) => g.id === goalId)
+        if (goal?.pendingUnlock) commit(replaceGoal(ctx.state, kind === 'retire' ? recordRetire(goal, tx) : recordRelease(goal, tx)))
+        toast(kind === 'retire' ? 'Retired. One more step.' : 'NIM returned to your wallet.', 'success')
+        return
+      }
+      break // included, but the server doesn't say how it went: the stake reading decides
+    }
+  } finally {
+    stepInFlight.delete(goalId)
+    afterTransaction()
+  }
+}
+
+/** Nimiq Pay sends one transaction at a time; say so plainly instead of blaming the cool-down. */
+function stepError(err: unknown): string {
+  const msg = errorMessage(err).replace(/\.+\s*$/, '')
+  if (/still pending|pending transaction/i.test(msg)) {
+    return 'Nimiq Pay is still waiting on your previous transaction. Try again once it has gone through or expired (at most about 2 hours).'
+  }
+  return `Not yet: ${msg}.`
 }
 
 function bindUnlockCard(root: HTMLElement, goal: Goal): void {
   const btn = $<HTMLButtonElement>('#unlock-next', root)
   const p = goal.pendingUnlock
-  if (!btn || !p || !ctx.wallet) return
+  if (!btn || !p || !ctx.wallet || btn.disabled) return
   const w = ctx.wallet
   btn.addEventListener('click', () =>
     void busy(btn, 'Confirm in Nimiq Pay…', async () => {
+      const kind = p.step === 'inactive' ? 'retire' : 'remove'
       try {
-        const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
-        if (p.step === 'inactive') {
-          const tx = await w.sendRetireStakeTransaction({ retireStake: p.luna })
-          commit(replaceGoal(ctx.state, recordRetire(latest, tx)))
-          toast('Retired. One more step.', 'info')
-        } else {
-          const tx = await w.sendRemoveStakeTransaction({ value: p.luna })
-          commit(replaceGoal(ctx.state, recordRelease(latest, tx)))
-          toast('NIM returned to your wallet.', 'info')
-        }
-        afterTransaction()
+        const tx =
+          kind === 'retire'
+            ? await w.sendRetireStakeTransaction({ retireStake: p.luna })
+            : await w.sendRemoveStakeTransaction({ value: p.luna })
+        stepInFlight.set(goal.id, { kind, tx })
+        toast('Sent. Waiting for the network to confirm…', 'info')
+        emit(true)
+        void watchStep(goal.id, kind, tx)
       } catch (err) {
-        toast(
-          isUserRejection(err) ? 'Cancelled' : `Not yet: ${errorMessage(err)}. The cool-down may still be running.`,
-          isUserRejection(err) ? 'info' : 'error',
-        )
+        toast(isUserRejection(err) ? 'Cancelled' : stepError(err), isUserRejection(err) ? 'info' : 'error')
       }
     }),
   )

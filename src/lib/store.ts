@@ -276,24 +276,65 @@ export function recordUnlockStart(goal: Goal, luna: number, tx: string, now = Da
   }
 }
 
-export function recordRetire(goal: Goal, tx: string, now = Date.now()): Goal {
+/** `tx` is absent when the blockchain showed the step done without Holdfast seeing the transaction. */
+export function recordRetire(goal: Goal, tx?: string, now = Date.now()): Goal {
   if (!goal.pendingUnlock) return goal
   return {
     ...goal,
     pendingUnlock: { ...goal.pendingUnlock, step: 'retired' },
-    events: [...goal.events, { type: 'retire', luna: goal.pendingUnlock.luna, at: now, tx }],
+    events: [...goal.events, { type: 'retire', luna: goal.pendingUnlock.luna, at: now, ...(tx ? { tx } : {}) }],
   }
 }
 
-export function recordRelease(goal: Goal, tx: string, now = Date.now()): Goal {
+export function recordRelease(goal: Goal, tx?: string, now = Date.now()): Goal {
   if (!goal.pendingUnlock) return goal
   const luna = goal.pendingUnlock.luna
   return {
     ...goal,
     lockedLuna: Math.max(0, goal.lockedLuna - luna),
     pendingUnlock: null,
-    events: [...goal.events, { type: 'release', luna, at: now, tx }],
+    events: [...goal.events, { type: 'release', luna, at: now, ...(tx ? { tx } : {}) }],
   }
+}
+
+/**
+ * Blocks after a deactivation takes effect (`inactiveFrom`) until the stake can be retired: one
+ * epoch of 43,200 blocks plus one (Nimiq's collateral lock-up, the same on mainnet and testnet).
+ * Blocks come about once a second, so with the wait for the deactivation to take effect at the
+ * next election block, a withdrawal takes 12 to 24 hours in total.
+ */
+export const RETIRE_LOCKUP_BLOCKS = 43_201
+
+/** The block from which deactivated stake can be retired, or null if nothing is deactivated. */
+export const retireReadyBlock = (inactiveFrom: number | null): number | null =>
+  inactiveFrom === null ? null : inactiveFrom + RETIRE_LOCKUP_BLOCKS
+
+/** Back to waiting for the cool-down: the stake was not retired (refused, or sent too early). */
+export function undoRetire(goal: Goal): Goal {
+  const p = goal.pendingUnlock
+  if (!p || p.step !== 'retired') return goal
+  return {
+    ...goal,
+    pendingUnlock: { ...p, step: 'inactive' },
+    events: goal.events.filter((e) => !(e.type === 'retire' && e.at >= p.startedAt)),
+  }
+}
+
+/**
+ * Match a withdrawal to what the blockchain shows, once the last step has had time to settle:
+ * a retire that didn't happen is undone, and a retire or return that did happen is recorded.
+ */
+export function reconcileWithdrawal(goal: Goal, stake: { inactiveBalance: number; retiredBalance: number }, now = Date.now()): Goal {
+  const p = goal.pendingUnlock
+  if (!p) return goal
+  const last = Math.max(p.startedAt, ...goal.events.filter((e) => e.type === 'retire' && e.at >= p.startedAt).map((e) => e.at))
+  if (now - last < SETTLE_MS) return goal
+  const retired = stake.retiredBalance >= p.luna
+  const inactive = stake.inactiveBalance >= p.luna
+  if (p.step === 'retired' && !retired && inactive) return undoRetire(goal)
+  if (p.step === 'retired' && !retired && !inactive) return recordRelease(goal, undefined, now)
+  if (p.step === 'inactive' && retired && !inactive) return recordRetire(goal, undefined, now)
+  return goal
 }
 
 /**
