@@ -262,6 +262,15 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 .l-hero .open-help { border-top: 0; padding: 16px; background: var(--surface); border: 1.5px solid var(--line); border-radius: 22px; }
 
 .l-panel { background: var(--surface); border: 1.5px solid var(--line); border-radius: 26px; padding: 22px 20px; }
+/* Landing photos (Pixabay, free licence). */
+.l-photo { display: block; }
+.l-photo img { display: block; width: 100%; height: auto; object-fit: cover; background: var(--line); }
+.l-photo-hero img { aspect-ratio: 3 / 2; border-radius: 26px; margin: 6px 0 2px; box-shadow: 0 10px 30px rgba(20, 24, 60, 0.12); }
+.l-panel-photo { overflow: hidden; }
+.l-panel-photo .l-photo { margin: -22px -20px 18px; }
+.l-panel-photo .l-photo img { aspect-ratio: 16 / 9; }
+.l-photo-bw img { object-position: 62% 40%; }
+.l-photo-leaf img { object-position: 50% 12%; }
 .l-label { display: block; margin: 0 0 14px; font-size: 0.9rem; font-weight: 800; color: var(--muted); letter-spacing: 0; }
 .bubbles { display: flex; flex-direction: column; gap: 10px; }
 .bubbles p { margin: 0; align-self: flex-start; max-width: 88%; padding: 10px 15px; border-radius: 18px 18px 18px 6px; background: var(--bg); color: var(--ink-2); }

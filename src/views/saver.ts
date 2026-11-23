@@ -125,6 +125,14 @@ export function statsStrip(): Raw {
   <p class="stats-note">Totals for all savers · NIM locked is checked on-chain</p>`
 }
 
+/** A landing-page photo (Pixabay, free licence), WebP with a JPEG fallback. */
+function photo(name: string, alt: string, w: number, h: number, cls = '', eager = false): Raw {
+  return html`<picture class="l-photo ${cls}">
+    <source srcset="/photos/${name}.webp" type="image/webp"/>
+    <img src="/photos/${name}.jpg" alt="${alt}" width="${w}" height="${h}" ${raw(eager ? 'fetchpriority="high"' : 'loading="lazy"')} decoding="async"/>
+  </picture>`
+}
+
 export function renderLanding(root: HTMLElement): void {
   // An invited visitor keeps their invite code when they move over to Nimiq Pay.
   const inviteCode = ctx.invite?.code ?? pendingInviteCode()
@@ -148,6 +156,7 @@ export function renderLanding(root: HTMLElement): void {
       <h1>Save it. Stake it. <span class="gold">Hold fast.</span></h1>
       <p class="lead">Lock savings goals by staking NIM from your own wallet. It earns rewards, stays yours,
         and a trusted friend keeps you honest.</p>
+      ${photo('portrait', 'A smiling young woman lying back, looking up at the camera', 1200, 800, 'l-photo-hero', true)}
       ${statsStrip()}
       <div id="open-help" class="open-help ${mobile ? 'hidden' : ''}">
         <p><b>${mobile ? 'Nothing happened?' : 'On a computer?'}</b>
@@ -162,7 +171,8 @@ export function renderLanding(root: HTMLElement): void {
       </div>
     </section>
 
-    <section class="l-panel" aria-label="Saving without Holdfast">
+    <section class="l-panel l-panel-photo" aria-label="Saving without Holdfast">
+      ${photo('head-down', 'A young man sitting on the floor, head down on his knees', 1200, 800, 'l-photo-bw')}
       <h3 class="l-label">Your savings, most months</h3>
       <div class="bubbles">
         <p>I'll just borrow 20 from savings</p>
@@ -173,7 +183,8 @@ export function renderLanding(root: HTMLElement): void {
       </div>
     </section>
 
-    <section class="l-panel" aria-label="The same month with Holdfast">
+    <section class="l-panel l-panel-photo" aria-label="The same month with Holdfast">
+      ${photo('leaf', 'A golden leaf with a small heart-shaped hole, lit by the sun', 1200, 900, 'l-photo-leaf')}
       <h3 class="l-label">The same month in Holdfast</h3>
       <ul class="l-rows">
         <li><span>500 NIM locked for Rent buffer</span><span class="chip chip-lock">Sealed</span></li>

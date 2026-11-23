@@ -221,3 +221,5 @@ tests/           automated tests
 ## License
 
 MIT
+
+The landing-page photos in `public/photos/` come from [Pixabay](https://pixabay.com) under the [Pixabay Content License](https://pixabay.com/service/license-summary/). They are not covered by the MIT license.
