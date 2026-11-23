@@ -111,9 +111,10 @@ export function compactNumber(n: number): string {
 }
 
 /** Live usage numbers, shown once there is something to show. */
-export function statsStrip(): Raw {
+export function statsStrip(between: Raw = html``): Raw {
   const st = ctx.stats
-  if (!st || st.savers < 1) return html``
+  // No numbers (yet, or no profile service): whatever goes between them still shows.
+  if (!st || st.savers < 1) return between
   const tile = (value: string, label: string, full: string) =>
     html`<li class="stats-tile" title="${full}"><b>${value}</b><span class="stats-label">${label}</span></li>`
   const nim = Math.floor(toNim(st.lockedLuna))
@@ -122,6 +123,7 @@ export function statsStrip(): Raw {
     ${tile(compactNumber(st.activeGoals), st.activeGoals === 1 ? 'active goal' : 'active goals', `${st.activeGoals.toLocaleString('en-US')} active goals`)}
     ${tile(compactNumber(nim), 'NIM locked', `${nim.toLocaleString('en-US')} NIM locked`)}
   </ul>
+  ${between}
   <p class="stats-note">Totals for all savers · NIM locked is checked on-chain</p>`
 }
 
@@ -156,8 +158,7 @@ export function renderLanding(root: HTMLElement): void {
       <h1>Save it. Stake it. <span class="gold">Hold fast.</span></h1>
       <p class="lead">Lock savings goals by staking NIM from your own wallet. It earns rewards, stays yours,
         and a trusted friend keeps you honest.</p>
-      ${photo('portrait', 'A smiling young woman lying back, looking up at the camera', 1200, 800, 'l-photo-hero', true)}
-      ${statsStrip()}
+      ${statsStrip(photo('portrait', 'A smiling young woman lying back, looking up at the camera', 1200, 800, 'l-photo-hero', true))}
       <div id="open-help" class="open-help ${mobile ? 'hidden' : ''}">
         <p><b>${mobile ? 'Nothing happened?' : 'On a computer?'}</b>
           ${mobile ? 'Nimiq Pay may not be installed, or your browser blocked the link.' : 'Open this page on the phone where Nimiq Pay is installed, or:'}</p>
