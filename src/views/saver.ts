@@ -171,8 +171,7 @@ export function renderLanding(root: HTMLElement): void {
       </div>
     </section>
 
-    <section class="l-panel l-panel-photo" aria-label="Saving without Holdfast">
-      ${photo('head-down', 'A young man sitting on the floor, head down on his knees', 1200, 800, 'l-photo-bw')}
+    <section class="l-panel" aria-label="Saving without Holdfast">
       <h3 class="l-label">Your savings, most months</h3>
       <div class="bubbles">
         <p>I'll just borrow 20 from savings</p>
@@ -207,7 +206,10 @@ export function renderLanding(root: HTMLElement): void {
     </section>
 
     <section class="l-block">
-      <div class="l-panel">${keeperDiagram}</div>
+      <div class="l-panel l-panel-photo">
+        ${photo('head-down', 'A young man sitting on the floor, head down on his knees', 1200, 800, 'l-photo-bw')}
+        ${keeperDiagram}
+      </div>
       <h2>One friend keeps you honest.</h2>
       <p class="lead">Share a link with a friend you trust. Without signing up, your Goalkeeper sees your progress,
         can send you a cheer in NIM, and sees it if you break the seal.</p>
