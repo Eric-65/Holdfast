@@ -276,6 +276,9 @@ export function recordUnlockStart(goal: Goal, luna: number, tx: string, now = Da
   }
 }
 
+/** The seal was broken and every NIM in the goal is back in the wallet: nothing is saved in it now. */
+export const isWithdrawn = (g: Goal): boolean => g.sealBrokenAt !== null && !g.pendingUnlock && weightOf(g) === 0
+
 /** `tx` is absent when the blockchain showed the step done without Holdfast seeing the transaction. */
 export function recordRetire(goal: Goal, tx?: string, now = Date.now()): Goal {
   if (!goal.pendingUnlock) return goal

@@ -103,6 +103,24 @@ describe('goal backup', () => {
     expect(await publicStats(ctx())).toEqual({ savers: 3, activeGoals: 1, lockedLuna: 50_00000 })
   })
 
+  it('a goal whose NIM has all come back to the wallet stops counting; locking again counts it again', async () => {
+    const me = newAddress()
+    const second = goal({ id: 'second99', lockedLuna: 20_00000 })
+    const sync = (g: Record<string, unknown>) => syncState(ctx(), me, { state: { goals: [g, second], accounts: [me] } })
+    await sync(goal())
+    expect(await publicStats(ctx())).toMatchObject({ activeGoals: 2, lockedLuna: 70_00000 })
+    // Seal broken, withdrawal under way: still counted until the NIM is back.
+    const broken = { sealBrokenAt: now, pendingUnlock: { luna: 50_00000, step: 'retired', startedAt: now } }
+    await sync(goal(broken))
+    expect(await publicStats(ctx())).toMatchObject({ activeGoals: 2, lockedLuna: 70_00000 })
+    // Returned to the wallet: one goal and 50 NIM fewer.
+    await sync(goal({ ...broken, pendingUnlock: null, lockedLuna: 0 }))
+    expect(await publicStats(ctx())).toMatchObject({ activeGoals: 1, lockedLuna: 20_00000 })
+    // A new lock into the same goal brings it back.
+    await sync(goal({ ...broken, pendingUnlock: null, lockedLuna: 5_00000 }))
+    expect(await publicStats(ctx())).toMatchObject({ activeGoals: 2, lockedLuna: 25_00000 })
+  })
+
   it('counts only NIM the blockchain confirms as staked', async () => {
     const [a, b, c] = [newAddress(), newAddress(), newAddress()]
     // a: really staked more than its goals; b: its locks were refused (no staker); c: chain unreadable.

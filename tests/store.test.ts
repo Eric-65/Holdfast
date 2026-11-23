@@ -8,6 +8,7 @@ import {
   recordRelease,
   recordRetire,
   recordUnlockStart,
+  isWithdrawn,
   reconcileWithdrawal,
   retireReadyBlock,
   saveState,
@@ -136,6 +137,9 @@ describe('withdrawals follow the blockchain', () => {
     expect(back.pendingUnlock).toBeNull()
     expect(back.lockedLuna).toBe(0)
     expect(back.events.at(-1)?.type).toBe('release')
+    expect(isWithdrawn(back)).toBe(true)
+    expect(isWithdrawn(retired)).toBe(false)
+    expect(isWithdrawn(recordLock(back, 10 * NIM, 'tx9', 40 * MIN))).toBe(false)
   })
 
   it('leaves a withdrawal alone while the chain still shows it waiting', () => {

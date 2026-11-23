@@ -172,11 +172,19 @@ export function readState(raw: unknown): SyncedState | null {
   }
 }
 
+/**
+ * Whether a goal counts in the public "active goals" and "NIM locked" numbers: an open goal,
+ * unless its seal was broken and every NIM in it has come back to the wallet. Locking into it
+ * again makes it count again.
+ */
+export const countsAsActive = (g: SyncedGoal): boolean =>
+  g.status === 'active' && !(g.sealBrokenAt !== null && !g.pendingUnlock && g.lockedLuna === 0 && !g.rewardLuna)
+
 /** Save the signed-in saver's goals. */
 export async function syncState(ctx: RequestContext, address: string, body: { state?: unknown }): Promise<{ updatedAt: number }> {
   await rateLimit(ctx, `sync:${address.replace(/\s/g, '')}`, 240, 3600)
   const state = cleanState(body.state, address, ctx.now)
-  const active = state.goals.filter((g) => g.status === 'active')
+  const active = state.goals.filter(countsAsActive)
   const member = address.replace(/\s/g, '')
   const locked = active.reduce((a, g) => a + g.lockedLuna, 0)
   await ctx.store.pipeline([

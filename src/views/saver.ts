@@ -11,6 +11,7 @@ import {
   startGoalWithdrawal,
   createGoal,
   goalSavings,
+  isWithdrawn,
   ledgerOf,
   MAX_ACTIVE_GOALS,
   walletBaselineKnown,
@@ -314,6 +315,7 @@ function sourceLine(): string {
 function statusChip(goal: Goal): Raw {
   if (goal.reachedAt) return html`<span class="chip chip-good">🎉 Reached</span>`
   if (goal.pendingUnlock) return html`<span class="chip chip-bad">⏳ Withdrawing</span>`
+  if (isWithdrawn(goal)) return html`<span class="chip chip-muted">↩️ Withdrawn</span>`
   if (goal.sealBrokenAt) return html`<span class="chip chip-bad">⚠️ Seal broken</span>`
   return html`<span class="chip chip-lock">🔒 Sealed</span>`
 }
@@ -542,8 +544,10 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
         ${
           goal.reachedAt
             ? html`<span class="chip chip-good">🎉 Goal reached</span>`
-            : goal.sealBrokenAt
-              ? html`<span class="chip chip-bad">Seal broken ${timeAgo(goal.sealBrokenAt)}</span>`
+            : isWithdrawn(goal)
+              ? html`<span class="chip chip-muted">↩️ Withdrawn: the NIM is back in your wallet</span>`
+              : goal.sealBrokenAt
+                ? html`<span class="chip chip-bad">Seal broken ${timeAgo(goal.sealBrokenAt)}</span>`
               : html`<span class="chip chip-lock">🔒 Sealed · ${formatNim(left)} NIM to go</span>`
         }
         ${rewards > 0 ? html`<span class="chip chip-good">+${formatNim(rewards, { decimals: 2 })} NIM rewards</span>` : ''}
@@ -554,6 +558,11 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
     </section>
 
     ${goal.pendingUnlock ? unlockCard(goal) : ''}
+    ${
+      isWithdrawn(goal)
+        ? html`<section class="card"><h3>Goal withdrawn</h3><p class="muted small">All of this goal's NIM is back in your wallet, so it no longer counts as an active goal or in NIM locked. Lock more below to start saving toward it again, or close it.</p></section>`
+        : ''
+    }
 
     <section class="card">
       <h3>Lock more NIM</h3>
