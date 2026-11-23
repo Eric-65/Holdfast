@@ -1,6 +1,6 @@
-import { getActiveValidatorAddresses, getStakeTotals, getTransactionOutcome, fetchCheers, fetchValidators, chainAvailable, readFreshFor, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
+import { getActiveValidatorAddresses, getBlockNumber, getStakeTotals, getTransactionOutcome, fetchCheers, fetchValidators, chainAvailable, readFreshFor, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
 import { getPrices, type PriceState } from './lib/prices'
-import { confirmLock, loadState, rejectLock, replaceGoal, saveState, SETTLE_MS, withWalletBaseline, type StoreState } from './lib/store'
+import { confirmLock, loadState, reconcileWithdrawal, rejectLock, replaceGoal, saveState, SETTLE_MS, withWalletBaseline, type StoreState } from './lib/store'
 import { hostFiat, hostNetwork, type Wallet } from './lib/wallet'
 import { toNim } from './lib/format'
 import type { OwnProfile, PublicStats } from './lib/api'
@@ -39,6 +39,8 @@ export interface AppCtx {
   stats: PublicStats | null
   /** When the goals were last backed up to the profile (ms), 0 = not yet on this visit. */
   syncedAt: number
+  /** The latest block number and when it was read, to count down a withdrawal's cool-down. */
+  chainBlock: { n: number; at: number } | null
 }
 
 export const ctx: AppCtx = {
@@ -59,6 +61,7 @@ export const ctx: AppCtx = {
   cheers: null,
   stats: null,
   syncedAt: 0,
+  chainBlock: null,
   fiats: (() => {
     const base = ['usdt', 'ngn']
     const h = hostFiat()
@@ -149,7 +152,15 @@ export async function refreshChain(): Promise<StakerInfo | null> {
   if (stake) ctx.stake = stake
   // The first settled reading tells how much of the stake belongs to no goal.
   if (stake) {
-    const fixed = withWalletBaseline(ctx.state, stake.balance)
+    let fixed = withWalletBaseline(ctx.state, stake.balance)
+    // Withdrawals follow the blockchain: undo a retire that didn't happen, record steps that did.
+    for (const g of fixed.goals) {
+      if (g.status !== 'active' || !g.pendingUnlock) continue
+      const matched = reconcileWithdrawal(g, stake)
+      if (matched !== g) fixed = replaceGoal(fixed, matched)
+    }
+    // A withdrawal waiting for its cool-down needs the block number for the countdown.
+    if (fixed.goals.some((g) => g.status === 'active' && g.pendingUnlock?.step === 'inactive')) await refreshBlock()
     if (fixed !== ctx.state) {
       commit(fixed, { quiet: true })
       return stake
@@ -157,6 +168,20 @@ export async function refreshChain(): Promise<StakerInfo | null> {
   }
   emit()
   return stake
+}
+
+const BLOCK_FRESH_MS = 60_000
+/** The current block number, read at most once a minute. */
+async function refreshBlock(): Promise<void> {
+  if (ctx.chainBlock && Date.now() - ctx.chainBlock.at < BLOCK_FRESH_MS) return
+  const n = await getBlockNumber()
+  if (n !== null) ctx.chainBlock = { n, at: Date.now() }
+}
+
+/** Best guess of the block number now: the last reading plus one block a second since. */
+export function estimatedBlock(now = Date.now()): number | null {
+  const b = ctx.chainBlock
+  return b ? b.n + Math.floor((now - b.at) / 1000) : null
 }
 
 /** A reading straight from the network, skipping any cached answer. For use right before a transaction. */
