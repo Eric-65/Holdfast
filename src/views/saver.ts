@@ -214,7 +214,7 @@ export function renderLanding(root: HTMLElement): void {
     </section>
 
     <section class="l-faq">
-      <h2>FAQs</h2>
+      <h2>Questions</h2>
       ${FAQ.map(([q, a]) => html`<details class="faq"><summary><span>${q}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><p>${a}</p></details>`)}
     </section>
 
