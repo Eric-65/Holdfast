@@ -269,6 +269,7 @@ input:focus, select:focus { outline: none; border-color: var(--gold); }
 .l-panel-photo { overflow: hidden; }
 .l-panel-photo .l-photo { margin: -22px -20px 18px; }
 .l-panel-photo .l-photo img { aspect-ratio: 16 / 9; }
+.l-photo-tall img { aspect-ratio: 4 / 5; border-radius: 26px; box-shadow: 0 10px 30px rgba(20, 24, 60, 0.12); }
 .l-photo-leaf img { object-position: 50% 12%; }
 .l-label { display: block; margin: 0 0 14px; font-size: 0.9rem; font-weight: 800; color: var(--muted); letter-spacing: 0; }
 .bubbles { display: flex; flex-direction: column; gap: 10px; }

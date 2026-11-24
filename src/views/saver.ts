@@ -222,6 +222,7 @@ export function renderLanding(root: HTMLElement): void {
           <li><span>Naira</span><b>₦2,775</b></li>
         </ul>
       </div>
+      ${photo('towers', 'Tall glass skyscrapers against a deep blue sky', 800, 1000, 'l-photo-tall')}
       <h2>Know what your goal is worth.</h2>
       <p class="lead">Every goal shows in NIM, USDT and naira, and you can set your target in whichever one you think in.</p>
     </section>
