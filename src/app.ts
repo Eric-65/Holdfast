@@ -39,6 +39,8 @@ export interface AppCtx {
   stats: PublicStats | null
   /** When the goals were last backed up to the profile (ms), 0 = not yet on this visit. */
   syncedAt: number
+  /** True once a cheers request has finished (cheers stay null if it failed). */
+  cheersChecked: boolean
   /** The latest block number and when it was read, to count down a withdrawal's cool-down. */
   chainBlock: { n: number; at: number } | null
 }
@@ -62,6 +64,7 @@ export const ctx: AppCtx = {
   stats: null,
   syncedAt: 0,
   chainBlock: null,
+  cheersChecked: false,
   fiats: (() => {
     const base = ['usdt', 'ngn']
     const h = hostFiat()
@@ -199,6 +202,10 @@ export async function refreshCheers(force = false): Promise<void> {
   cheersFetchedAt = Date.now()
   const cheers = await fetchCheers(address)
   if (address !== ctx.address) return
+  if (!ctx.cheersChecked) {
+    ctx.cheersChecked = true
+    if (cheers === null) emit()
+  }
   if (cheers === null && ctx.cheers !== null) return // keep what we have on a temporary failure
   ctx.cheers = cheers
   emit()

@@ -1,4 +1,5 @@
 import { config } from './config'
+import { timeoutSignal } from './net'
 
 export interface StakerInfo {
   address: string
@@ -41,8 +42,7 @@ export const readFreshFor = (ms: number): void => {
   freshUntil = Math.max(freshUntil, Date.now() + ms)
 }
 
-const timeout = (ms: number): AbortSignal | undefined =>
-  typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined
+const timeout = timeoutSignal
 
 /** An error reported by the RPC server itself (it answered), as opposed to no answer at all. */
 export class ChainAnswerError extends Error {}
@@ -259,7 +259,7 @@ export function parseValidators(json: unknown): Validator[] {
 
 export async function fetchValidators(): Promise<Validator[]> {
   try {
-    const res = await fetch(config.validatorsApiUrl, { headers: { Accept: 'application/json' } })
+    const res = await fetch(config.validatorsApiUrl, { headers: { Accept: 'application/json' }, signal: timeout(10_000) })
     if (!res.ok) return []
     return parseValidators(await res.json())
   } catch {

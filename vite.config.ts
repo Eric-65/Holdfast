@@ -36,5 +36,7 @@ export default defineConfig({
   base: './',
   plugins: [holdfastLocalApi()],
   build: { target: 'es2020', sourcemap: true },
+  // The commit this build comes from, so a running app can tell when a newer one is live.
+  define: { __APP_COMMIT__: JSON.stringify((process.env.VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 7)) },
   test: { environment: 'jsdom' },
 } as any)

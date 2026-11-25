@@ -15,7 +15,9 @@ describe('parseNimInput', () => {
 
 describe('formatting', () => {
   it('formats NIM and fiat', () => {
-    expect(formatNim(toLuna(1234.567))).toBe('1,235')
+    expect(formatNim(toLuna(1234.567))).toBe('1,234.57')
+    expect(formatNim(toLuna(50_050))).toBe('50,050')
+    expect(formatNim(123_456_789, { full: true })).toBe('1,234.56789')
     expect(formatNim(toLuna(12.345))).toBe('12.35')
     expect(formatFiat(1234.5, 'usd')).toBe('$1,234.50')
     expect(formatFiat(1234.5, 'usdt')).toBe('1,234.50 USDT')

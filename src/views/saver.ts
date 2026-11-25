@@ -28,7 +28,7 @@ import { keeperUrl, type KeeperPayload } from '../lib/share'
 import { errorMessage, hostNetwork, isUserRejection } from '../lib/wallet'
 import { isMobileDevice, miniAppTarget, miniAppUrl, NIMIQ_PAY_INSTALL_URL, nimiqPayDeepLink } from '../lib/deeplink'
 import { pendingInviteCode } from '../lib/identity'
-import { $, $$, busy, copyText, html, openSheet, raw, ring, toast, type Raw } from '../ui'
+import { $, $$, burst, busy, copyText, html, openSheet, raw, ring, skeleton, toast, type Raw } from '../ui'
 import { fiatRow, header, nim } from './common'
 
 const EMOJIS = ['🎯', '🏠', '🎓', '✈️', '🚗', '💍', '📱', '🛡️', '👶', '💻', '🏥', '🎁']
@@ -124,13 +124,16 @@ export function statsStrip(between: Raw = html``): Raw {
     ${tile(compactNumber(nim), 'NIM locked', `${nim.toLocaleString('en-US')} NIM locked`)}
   </ul>
   ${between}
-  <p class="stats-note">Totals for all savers · NIM locked is checked on-chain</p>`
+  <p class="stats-note">Totals for all savers · NIM locked is checked on-chain<br/><a href="#/stats">See all the numbers →</a></p>`
 }
 
-/** A landing-page photo (Pixabay, free licence), WebP with a JPEG fallback. */
+/**
+ * A landing-page photo (Pixabay, free licence): WebP at 600 and 1200 px wide, a JPEG fallback, and
+ * its size set so the page doesn't jump while it loads. The landing page keeps exactly two.
+ */
 function photo(name: string, alt: string, w: number, h: number, cls = '', eager = false): Raw {
   return html`<picture class="l-photo ${cls}">
-    <source srcset="/photos/${name}.webp" type="image/webp"/>
+    <source srcset="/photos/${name}-600.webp 600w, /photos/${name}.webp 1200w" sizes="(max-width: 520px) calc(100vw - 32px), 488px" type="image/webp"/>
     <img src="/photos/${name}.jpg" alt="${alt}" width="${w}" height="${h}" ${raw(eager ? 'fetchpriority="high"' : 'loading="lazy"')} decoding="async"/>
   </picture>`
 }
@@ -173,7 +176,7 @@ export function renderLanding(root: HTMLElement): void {
     </section>
 
     <section class="l-panel" aria-label="Saving without Holdfast">
-      <h3 class="l-label">Your savings, most months</h3>
+      <p class="l-label">Your savings, most months</p>
       <div class="bubbles">
         <p>I'll just borrow 20 from savings</p>
         <p class="right">putting it back on Friday</p>
@@ -185,7 +188,7 @@ export function renderLanding(root: HTMLElement): void {
 
     <section class="l-panel l-panel-photo" aria-label="The same month with Holdfast">
       ${photo('leaf', 'A golden leaf with a small heart-shaped hole, lit by the sun', 1200, 900, 'l-photo-leaf')}
-      <h3 class="l-label">The same month in Holdfast</h3>
+      <p class="l-label">The same month in Holdfast</p>
       <ul class="l-rows">
         <li><span>500 NIM locked for Rent buffer</span><span class="chip chip-lock">Sealed</span></li>
         <li><span>Staking rewards on your goal</span><span class="chip chip-good">Earning</span></li>
@@ -215,7 +218,7 @@ export function renderLanding(root: HTMLElement): void {
 
     <section class="l-block">
       <div class="l-panel">
-        <h3 class="l-label">Rent buffer, 37% there</h3>
+        <p class="l-label">Rent buffer, 37% there</p>
         <ul class="l-rows worth">
           <li><span>NIM</span><b>1,500</b></li>
           <li><span>USDT</span><b>1.80</b></li>
@@ -226,6 +229,17 @@ export function renderLanding(root: HTMLElement): void {
       <p class="lead">Every goal shows in NIM, USDT and naira, and you can set your target in whichever one you think in.</p>
     </section>
 
+    <section class="l-block l-nimiq" aria-labelledby="built-on-nimiq">
+      <h2 id="built-on-nimiq">Built on Nimiq</h2>
+      <p class="lead">NIM does more here than move from one wallet to another.</p>
+      <ul class="l-rows nimiq-rows">
+        <li><span><b>Staking is the lock.</b> A goal is real stake in your own wallet, created and released with Nimiq's staking transactions.</span></li>
+        <li><span><b>Confirmed on chain.</b> Every lock and withdrawal step is checked on the Nimiq blockchain before Holdfast counts it.</span></li>
+        <li><span><b>Cheers with on-chain messages.</b> A friend's cheer is a NIM payment carrying a message, read back from the blockchain.</span></li>
+        <li><span><b>Wallet-signed profiles.</b> One message signed in Nimiq Pay proves your profile is yours. No password, no email.</span></li>
+      </ul>
+    </section>
+
     <section class="l-faq">
       <h2>Questions</h2>
       ${FAQ.map(([q, a]) => html`<details class="faq"><summary><span>${q}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><p>${a}</p></details>`)}
@@ -233,7 +247,7 @@ export function renderLanding(root: HTMLElement): void {
 
     <section class="l-end">
       ${openButton('', '', 'Open in Nimiq Pay ↗')}
-      ${ctx.apiAvailable ? html`<a class="btn btn-ghost" href="#/board">🏆 See the leaderboard</a>` : ''}
+      ${ctx.apiAvailable ? html`<a class="btn btn-ghost" href="#/board">🏆 See the leaderboard</a><a class="btn btn-link" href="#/stats">Holdfast in numbers</a>` : ''}
       <p class="muted small center">Holdfast is non-custodial. It never holds your NIM.</p>
     </section>
   </main></div>`.html
@@ -366,7 +380,7 @@ function renderGoalsList(root: HTMLElement): void {
         const saved = savings.get(g.id) ?? 0
         const p = pct(saved, g.targetLuna)
         return html`<li><a class="goal-card ${g.reachedAt ? 'reached' : ''} ${g.sealBrokenAt || g.pendingUnlock ? 'broken' : ''}" href="#/goal/${g.id}">
-          <span class="goal-card-ring">${ring(p, 58, 6)}<span class="goal-card-emoji">${g.emoji}</span></span>
+          <span class="goal-card-ring">${ring(p, 58, 6, '', `card-${g.id}`)}<span class="goal-card-emoji">${g.emoji}</span></span>
           <span class="goal-card-body">
             <b class="goal-card-name">${g.name}</b>
             <span class="goal-card-amount"><b>${formatNim(saved)}</b> <span class="muted">/ ${formatNim(g.targetLuna)} NIM · ${Math.floor(p)}%</span></span>
@@ -424,8 +438,8 @@ function renderNewGoal(root: HTMLElement): void {
   <main class="page">
     ${hasGoals ? html`<a class="back-link" href="#/">← Back to my goals</a>` : ''}
     <section class="hero small">
-      <h1>${hasGoals ? 'New goal' : 'Start a goal'}</h1>
-      <p class="lead">What are you holding fast for?</p>
+      <h1>${hasGoals ? 'New goal' : 'Start your first goal'}</h1>
+      <p class="lead">${hasGoals ? 'What are you holding fast for?' : 'No goals yet. Name what you are saving for and set a target; next you lock NIM into it.'}</p>
     </section>
     <form id="goal-form" class="card form" novalidate>
       <label>Goal name
@@ -542,7 +556,7 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
     <a class="back-link" href="#/">← My goals</a>
     <section class="goal-hero ${goal.sealBrokenAt ? 'broken' : ''} ${goal.reachedAt ? 'reached' : ''}">
       <div class="ring-wrap">
-        ${ring(p)}
+        ${ring(p, 184, 14, '', `goal-${goal.id}`)}
         <div class="ring-center">
           <div class="goal-emoji">${goal.emoji}</div>
           <div class="ring-pct">${Math.floor(p)}%</div>
@@ -604,7 +618,14 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
             }
             <p class="muted small">Cheers land in your wallet's normal balance. Locking them makes them part of your goal.</p>
           </section>`
-        : ''
+        : ctx.cheers === null
+          ? html`<section class="card cheers-card"><h3>🎉 Cheers</h3>${
+              ctx.cheersChecked ? html`<p class="muted">Cheers can't be loaded right now. They are safe in your wallet and show here once the network answers.</p>` : skeleton(2)
+            }</section>`
+          : html`<section class="card cheers-card empty-state">
+              <h3>🎉 No cheers yet</h3>
+              <p class="muted">Share your Goalkeeper link below. Your friend can cheer you on with NIM and a message, and it shows up here.</p>
+            </section>`
     }
 
     <section class="card keeper-card">
@@ -782,6 +803,7 @@ async function watchLock(tx: string, luna: number): Promise<void> {
       const goal = ctx.state.goals.find((g) => g.events.some((e) => e.type === 'lock' && e.tx === tx))
       if (goal) commit({ ...replaceGoal(ctx.state, confirmLock(goal, tx)), stakerCreated: true })
       toast(`Locked ${formatNim(luna)} NIM. Hold fast! 🔒`, 'success')
+      burst(document.querySelector('.goal-hero .ring-wrap'))
       return
     }
   }
@@ -820,7 +842,8 @@ function keeperPayload(goal: Goal): KeeperPayload {
 
 function shareKeeper(goal: Goal): void {
   const url = keeperUrl(location.href, keeperPayload(goal))
-  const text = `I'm saving for "${goal.name}" with Holdfast. Be my Goalkeeper: watch my progress, cheer me on, and call me out if I break the seal.`
+  // Short, and the link on its own line, so chat apps show it as a preview card.
+  const text = `🛡️ Be my Goalkeeper! I'm saving for "${goal.name}" with Holdfast. Watch my progress and cheer me on:`
   openSheet(
     html`<h2>Be my Goalkeeper</h2>
       <p class="muted">Send this link to <b>one</b> friend you trust. It shows your goal, progress and public wallet address.
@@ -830,7 +853,7 @@ function shareKeeper(goal: Goal): void {
         <button class="btn btn-primary" id="do-share">Share…</button>
         <button class="btn btn-secondary" id="do-copy">Copy link</button>
       </div>
-      <a class="btn btn-link" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`${text} ${url}`)}">Send via WhatsApp</a>`,
+      <a class="btn btn-link" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`${text}\n${url}`)}">Send via WhatsApp</a>`,
     (sheet) => {
       const mark = () => {
         const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
@@ -922,7 +945,7 @@ async function breakSeal(goal: Goal): Promise<void> {
         e.preventDefault()
         const luna = parseNimInput((form.elements.namedItem('amount') as HTMLInputElement).value)
         if (!luna) return toast('Enter an amount', 'error')
-        if (luna > max) return toast(`You can withdraw at most ${formatNim(max)} NIM from this goal`, 'error')
+        if (luna > max) return toast(`You can withdraw at most ${formatNim(max, { full: true })} NIM from this goal`, 'error')
         void busy(submit, 'Confirm in Nimiq Pay…', async () => {
           if (await startUnlock(goal, luna)) close()
         })
@@ -943,7 +966,7 @@ async function startUnlock(goal: Goal, luna: number): Promise<boolean> {
   }
   const latestGoal = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
   if (luna > goalShare(latestGoal, live.balance)) {
-    toast(`Your stake changed. You can withdraw at most ${formatNim(goalShare(latestGoal, live.balance))} NIM from this goal now.`, 'error')
+    toast(`Your stake changed. You can withdraw at most ${formatNim(goalShare(latestGoal, live.balance), { full: true })} NIM from this goal now.`, 'error')
     return false
   }
   const newActiveBalance = live.balance - luna

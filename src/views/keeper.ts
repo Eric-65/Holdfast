@@ -200,7 +200,7 @@ export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
       <p class="eyebrow">${owner ? html`You're <b>${owner}</b>'s Goalkeeper` : "You're the Goalkeeper for"}</p>
       <section class="goal-hero ${broken ? 'broken' : ''} ${reached ? 'reached' : ''}">
         <div class="ring-wrap">
-          ${ring(percent)}
+          ${ring(percent, 184, 14, '', 'keeper')}
           <div class="ring-center"><div class="goal-emoji">${emoji}</div><div class="ring-pct">${Math.floor(percent)}%</div></div>
         </div>
         <h1 class="goal-name">${name}</h1>

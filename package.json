@@ -1,7 +1,7 @@
 {
   "name": "holdfast",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Holdfast — Save it. Stake it. Hold fast. A non-custodial savings Mini App for Nimiq Pay.",
   "type": "module",
   "scripts": {

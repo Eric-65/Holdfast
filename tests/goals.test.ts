@@ -405,9 +405,15 @@ describe('health check with a backup', () => {
         if (body.method === 'getStakerByAddress') return body.params[0] === second.replace(/\s/g, '') ? { result: { data: { balance: 50_00000 } } } : { error: { message: 'No staker with address' } }
         return { result: { data: { from: me, to: 'NQ07 0000', value: 50_00000, blockNumber: 99 } } }
       },
-      {},
+      { HF_ADMIN_TOKEN: 'admin-token-0123456789' },
     )
-    const r = JSON.parse((await run(handler, `/api/hf?a=health&addr=${me.replace(/\s/g, '')}`)).body)
+    // Without the admin token: the public stake reading only, never the backup's addresses or goal names.
+    const anon = JSON.parse((await run(handler, `/api/hf?a=health&addr=${me.replace(/\s/g, '')}`)).body)
+    expect(anon.staker).toEqual({ error: 'No staker with address' })
+    expect(typeof anon.accounts).toBe('string')
+    expect(anon.locks).toBeUndefined()
+    expect(JSON.stringify(anon)).not.toContain('Rent buffer')
+    const r = JSON.parse((await run(handler, `/api/hf?a=health&addr=${me.replace(/\s/g, '')}&token=admin-token-0123456789`)).body)
     expect(r.staker).toEqual({ error: 'No staker with address' })
     expect(r.accounts).toEqual([
       { address: me, staker: { error: 'No staker with address' } },

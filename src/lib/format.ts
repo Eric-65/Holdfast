@@ -15,9 +15,13 @@ export function parseNimInput(raw: string): number | null {
   return Number.isFinite(luna) && luna > 0 ? luna : null
 }
 
-export function formatNim(luna: number, opts: { decimals?: number } = {}): string {
+/**
+ * NIM for display: up to 2 decimals everywhere ("50,050.12", "10"), and full precision (5 decimals,
+ * one luna) where an exact amount matters, such as the most you can withdraw.
+ */
+export function formatNim(luna: number, opts: { decimals?: number; full?: boolean } = {}): string {
   const nim = toNim(luna)
-  const decimals = opts.decimals ?? (Math.abs(nim) >= 1000 ? 0 : 2)
+  const decimals = opts.full ? 5 : (opts.decimals ?? 2)
   return nim.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: decimals })
 }
 

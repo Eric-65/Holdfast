@@ -1,4 +1,5 @@
 import { config } from './config'
+import { isTimeout, timeoutSignal } from './net'
 
 export interface PublicProfile {
   name: string
@@ -25,6 +26,9 @@ export interface PublicStats {
   savers: number
   activeGoals: number
   lockedLuna: number
+  /** Absent from servers older than release 1.0. */
+  referrals?: number
+  joined7d?: number
 }
 
 /** A goal as backed up on the server (the same fields as on the phone, plus the saved amount). */
@@ -94,9 +98,10 @@ async function call<T>(action: string, opts: { body?: unknown; token?: string | 
         ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
       },
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      signal: timeoutSignal(12_000),
     })
-  } catch {
-    throw new ApiFailure(0, 'unavailable', 'Could not reach Holdfast. Check your connection.')
+  } catch (err) {
+    throw new ApiFailure(0, 'unavailable', isTimeout(err) ? "Holdfast didn't answer in time. Try again in a moment." : 'Could not reach Holdfast. Check your connection.')
   }
   const json = (await res.json().catch(() => null)) as (T & { error?: string; message?: string }) | null
   if (res.ok && json) return json
@@ -115,6 +120,7 @@ export const api = {
   setName: (token: string, name: string) => call<{ profile: OwnProfile }>('name', { token, body: { name } }),
   claim: (token: string, code: string) => call<{ profile: OwnProfile; inviter: string }>('claim', { token, body: { code } }),
   stats: () => call<PublicStats>('stats'),
+  version: () => call<{ version: string; appVersion: string }>('version'),
   goal: (address: string, id: string) => call<PublicGoal>('goal', { query: { addr: address.replace(/\s/g, ''), id } }),
   sync: (token: string, state: Omit<SyncedState, 'updatedAt'>) => call<{ updatedAt: number }>('sync', { token, body: { state } }),
   state: (token: string) => call<{ state: SyncedState | null }>('state', { token }),
