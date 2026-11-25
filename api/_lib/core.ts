@@ -307,6 +307,16 @@ async function standings(ctx: RequestContext): Promise<Standing[]> {
   return rows
 }
 
+/** Referrals counted across every profile, and profiles created in the last 7 days. */
+export async function profileTotals(ctx: RequestContext): Promise<{ referrals: number; joined7d: number }> {
+  const board = await standings(ctx)
+  const since = ctx.now - 7 * 86_400_000
+  return {
+    referrals: board.reduce((a, r) => a + r.referrals, 0),
+    joined7d: board.filter((r) => r.joinedAt !== Number.MAX_SAFE_INTEGER && r.joinedAt >= since).length,
+  }
+}
+
 export async function ownProfile(ctx: RequestContext, address: string): Promise<OwnProfile> {
   const [rawUser, refs, refCount] = await ctx.store.pipeline([
     ['HGETALL', userKey(address)],

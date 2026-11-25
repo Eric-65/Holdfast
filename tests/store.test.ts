@@ -8,7 +8,11 @@ import {
   recordRelease,
   recordRetire,
   recordUnlockStart,
+  isWithdrawn,
+  reconcileWithdrawal,
+  retireReadyBlock,
   saveState,
+  undoRetire,
   savedLuna,
   withChainBaseline,
 } from '../src/lib/store'
@@ -74,7 +78,7 @@ describe('starting stake not known when the goal was made', () => {
 
 describe('persistence', () => {
   it('round-trips per address and survives corrupt data', () => {
-    const state = { version: 1 as const, goals: [mk()], stakerCreated: true }
+    const state = { version: 1 as const, goals: [mk()], stakerCreated: true, walletBaselineLuna: 50_00000, walletBaselineFromChain: true }
     saveState('NQ07 0000', state)
     expect(loadState('nq070000')).toEqual(state)
     localStorage.setItem('holdfast.v1.BROKEN', '{nope')
@@ -99,5 +103,47 @@ describe('Goalkeeper and relay safety rules', () => {
     expect(looksLikeStaticHost({ status: 200, ok: true }, null)).toBe(true) // the app's HTML page
     expect(looksLikeStaticHost({ status: 504, ok: false }, null)).toBe(false)
     expect(looksLikeStaticHost({ status: 502, ok: false }, null)).toBe(false)
+  })
+})
+
+describe('withdrawals follow the blockchain', () => {
+  const MIN = 60_000
+  const NIM = 100_000
+  const withdrawing = () => recordUnlockStart(recordLock(mk(), 100_100 * NIM, 'tx1', 1), 100_100 * NIM, 'tx2', 10 * MIN)
+
+  it('stake can be retired one epoch plus one block after the deactivation takes effect', () => {
+    expect(retireReadyBlock(17_370_000)).toBe(17_413_201)
+    expect(retireReadyBlock(null)).toBeNull()
+  })
+
+  it('undoes a retire the network never did (sent before the cool-down ended)', () => {
+    const early = recordRetire(withdrawing(), 'tx3', 12 * MIN)
+    expect(early.pendingUnlock?.step).toBe('retired')
+    const chain = { inactiveBalance: 100_100 * NIM, retiredBalance: 0 }
+    // Too soon to tell: left alone.
+    expect(reconcileWithdrawal(early, chain, 13 * MIN)).toBe(early)
+    const fixed = reconcileWithdrawal(early, chain, 20 * MIN)
+    expect(fixed.pendingUnlock?.step).toBe('inactive')
+    expect(fixed.events.some((e) => e.type === 'retire')).toBe(false)
+    expect(fixed.lockedLuna).toBe(early.lockedLuna)
+    expect(undoRetire(fixed)).toBe(fixed)
+  })
+
+  it('records a retire and a return the blockchain shows', () => {
+    const g = withdrawing()
+    const retired = reconcileWithdrawal(g, { inactiveBalance: 0, retiredBalance: 100_100 * NIM }, 20 * MIN)
+    expect(retired.pendingUnlock?.step).toBe('retired')
+    const back = reconcileWithdrawal(retired, { inactiveBalance: 0, retiredBalance: 0 }, 30 * MIN)
+    expect(back.pendingUnlock).toBeNull()
+    expect(back.lockedLuna).toBe(0)
+    expect(back.events.at(-1)?.type).toBe('release')
+    expect(isWithdrawn(back)).toBe(true)
+    expect(isWithdrawn(retired)).toBe(false)
+    expect(isWithdrawn(recordLock(back, 10 * NIM, 'tx9', 40 * MIN))).toBe(false)
+  })
+
+  it('leaves a withdrawal alone while the chain still shows it waiting', () => {
+    const g = withdrawing()
+    expect(reconcileWithdrawal(g, { inactiveBalance: 100_100 * NIM, retiredBalance: 0 }, 60 * MIN)).toBe(g)
   })
 })

@@ -1,15 +1,19 @@
 import { createHash } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { cleanNet, fetchCheers, httpTransport, relay, rpcUrlFor, type RpcTransport } from './_lib/chain.js'
-import { ApiError, authenticate, claimInvite, createChallenge, inviteInfo, leaderboard, login, ownProfile, rateLimit, setName, type RequestContext } from './_lib/core.js'
-import { getState, publicGoal, publicStats, syncState } from './_lib/goals.js'
+import { cleanNet, fetchCheers, httpTransport, relay, rpcUrlFor, stakedOnChain, type RpcTransport } from './_lib/chain.js'
+import { ApiError, authenticate, claimInvite, createChallenge, inviteInfo, leaderboard, login, ownProfile, profileTotals, rateLimit, setName, type RequestContext } from './_lib/core.js'
+import { getState, publicGoal, publicStats, readState, stateKey, syncState } from './_lib/goals.js'
+import { normalizeAddress } from './_lib/crypto.js'
+import { isAdmin, listReports, saveReport } from './_lib/report.js'
 import { storeFromEnv, type Store } from './_lib/store.js'
+import { APP_VERSION } from './_lib/version.js'
 
 /**
  * Holdfast API: one serverless function, routed by ?a=<action>.
  *   GET  leaderboard | invite&code=X | stats | goal&addr=X&id=Y | me (signed in) | state (signed in)
  *        rpc&m=METHOD&p=PARAM&net=mainnet|testnet | cheers&addr=X&net=...  (read-only blockchain, no database needed)
- *   POST challenge | login | name (signed in) | claim (signed in) | sync (signed in)
+ *        version (which build is live) | health[&addr=X&token=ADMIN] | report&token=ADMIN (recent app errors)
+ *   POST challenge | login | name (signed in) | claim (signed in) | sync (signed in) | report (an app error)
  */
 type Req = IncomingMessage & { body?: unknown }
 /** Goal backups are the largest requests: up to a dozen goals with their recent activity. */
@@ -91,9 +95,23 @@ export function createHandler(
         requireUniqueDevice: env.HF_REQUIRE_UNIQUE_DEVICE === '1',
       })
 
+      const commit = (env.VERCEL_GIT_COMMIT_SHA || 'local').slice(0, 7)
+      // Diagnostics that go beyond public blockchain data need HF_ADMIN_TOKEN (&token=… or X-Admin-Token).
+      const admin = isAdmin(url.searchParams.get('token') ?? header(req, 'x-admin-token'), env.HF_ADMIN_TOKEN)
+
+      // Which build is live: the app compares it with its own to offer "Update available".
+      if (req.method === 'GET' && action === 'version') return send(200, { version: commit, appVersion: APP_VERSION }, 'public, s-maxage=30, max-age=30')
+
       // Blockchain reads work even without the profile database.
       // A one-word health check: is this version live, and does the blockchain relay answer?
       if (req.method === 'GET' && action === 'health') {
+        // Each health check reads the chain a few times: limit it per caller (the database being down never blocks it).
+        if (store) {
+          const c = context(store)
+          await rateLimit(c, `health:${c.ipKey}`, 60, 300).catch((err) => {
+            if (err instanceof ApiError) throw err
+          })
+        }
         let block: number | null = null
         let chain = 'ok'
         try {
@@ -104,7 +122,85 @@ export function createHandler(
         } catch (err) {
           chain = err instanceof Error ? err.message : 'no answer'
         }
-        return send(200, { ok: block !== null, version: 'live-goals', relay: chain, block, database: !!store, rpcServer: rpcUrlFor(cleanNet(url.searchParams.get('net')), env) })
+        // Optional: &addr=NQ... also reads that wallet's stake, the same way the goal screen does,
+        // for every Nimiq Pay address in its backup, and looks up its last few lock transactions.
+        let staker: unknown = undefined
+        let accounts: unknown = undefined
+        let locks: unknown = undefined
+        const addr = url.searchParams.get('addr')
+        const net = cleanNet(url.searchParams.get('net'))
+        const read = async (method: string, param: string) => {
+          try {
+            const r = await relay(transport, { method, param, net }, env)
+            const body = r.body as { result?: unknown; error?: { message?: string } }
+            return body.error ? { error: body.error.message ?? 'error' } : { result: body.result ?? null }
+          } catch (err) {
+            return { error: err instanceof Error ? err.message : 'no answer' }
+          }
+        }
+        if (addr) {
+          staker = await read('getStakerByAddress', addr)
+          const owner = normalizeAddress(addr)
+          let saved: ReturnType<typeof readState> = null
+          if (owner && store) {
+            try {
+              saved = readState(await store.cmd('GET', stateKey(owner)))
+            } catch {
+              /* database unreachable: skip the backup part */
+            }
+          }
+          // The backup links a wallet's addresses and goal names: only for the builder.
+          if (saved && !admin) {
+            accounts = 'add &token=<HF_ADMIN_TOKEN> to see the backed-up addresses and recent locks'
+          } else if (saved) {
+            accounts = await Promise.all(saved.accounts.map(async (a) => ({ address: a, staker: await read('getStakerByAddress', a) })))
+            const recent = saved.goals
+              .flatMap((g) => g.events.filter((e) => e.type === 'lock' && e.tx).map((e) => ({ goal: g.name, luna: e.luna, at: e.at, tx: e.tx! })))
+              .sort((a, b) => b.at - a.at)
+              .slice(0, 3)
+            locks = await Promise.all(
+              recent.map(async (l) => {
+                const t = await read('getTransactionByHash', l.tx)
+                const info = (t as { result?: Record<string, unknown> }).result
+                return {
+                  goal: l.goal,
+                  nim: l.luna / 100_000,
+                  at: new Date(l.at).toISOString(),
+                  hash: l.tx,
+                  ...(info
+                    ? {
+                        onChain: true,
+                        // false: the network included the transaction but refused it (nothing was staked).
+                        executionResult: info.executionResult ?? null,
+                        from: info.from,
+                        to: info.to,
+                        value: info.value,
+                        fee: info.fee,
+                        recipientData: info.recipientData,
+                        blockNumber: info.blockNumber,
+                      }
+                    : { onChain: false, answer: t }),
+                }
+              }),
+            )
+          } else {
+            accounts = 'no backup for this address'
+          }
+        }
+        return send(200, {
+          ok: block !== null,
+          version: commit,
+          appVersion: APP_VERSION,
+          relay: chain,
+          block,
+          database: !!store,
+          rpcServer: rpcUrlFor(cleanNet(url.searchParams.get('net')), env),
+          // If set, the app calls this server straight from the phone, which most servers don't allow.
+          directRpcFromPhone: env.VITE_NIMIQ_RPC_URL ? env.VITE_NIMIQ_RPC_URL : false,
+          ...(staker !== undefined ? { staker } : {}),
+          ...(accounts !== undefined ? { accounts } : {}),
+          ...(locks !== undefined ? { locks } : {}),
+        })
       }
 
       if (req.method === 'GET' && (action === 'rpc' || action === 'cheers')) {
@@ -129,8 +225,20 @@ export function createHandler(
       const signedIn = () => authenticate(ctx, header(req, 'authorization'))
 
       if (req.method === 'GET') {
+        // Public reads are cached by the CDN; these limits stop cache-busting floods.
+        if (action === 'leaderboard' || action === 'stats') await rateLimit(ctx, `pub:${ctx.ipKey}`, 240, 300)
         if (action === 'leaderboard') return send(200, await leaderboard(ctx), 'public, s-maxage=10, max-age=5')
-        if (action === 'stats') return send(200, await publicStats(ctx), 'public, s-maxage=30, max-age=15')
+        if (action === 'stats') {
+          const [goals, profiles] = await Promise.all([
+            publicStats(ctx, (accounts, net) => stakedOnChain(transport, accounts, net, env)),
+            profileTotals(ctx),
+          ])
+          return send(200, { ...goals, ...profiles }, 'public, s-maxage=30, max-age=15')
+        }
+        if (action === 'report') {
+          if (!admin) throw new ApiError(403, 'forbidden', 'Add &token=<HF_ADMIN_TOKEN> to read error reports.')
+          return send(200, await listReports(ctx))
+        }
         if (action === 'invite') return send(200, await inviteInfo(ctx, url.searchParams.get('code')))
         if (action === 'goal') return send(200, await publicGoal(ctx, url.searchParams.get('addr'), url.searchParams.get('id')), 'public, s-maxage=5, max-age=5')
         if (action === 'me') return send(200, { profile: await ownProfile(ctx, await signedIn()) })
@@ -142,6 +250,7 @@ export function createHandler(
         if (action === 'name') return send(200, { profile: await setName(ctx, await signedIn(), body) })
         if (action === 'claim') return send(200, await claimInvite(ctx, await signedIn(), body))
         if (action === 'sync') return send(200, await syncState(ctx, await signedIn(), body))
+        if (action === 'report') return send(200, await saveReport(ctx, body))
       }
       throw new ApiError(404, 'not_found', 'Unknown request.')
     } catch (err) {

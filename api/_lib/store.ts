@@ -55,6 +55,7 @@ type Entry =
   | { t: 'hash'; v: Map<string, string>; exp?: number }
   | { t: 'zset'; v: Map<string, number>; exp?: number }
   | { t: 'set'; v: Set<string>; exp?: number }
+  | { t: 'list'; v: string[]; exp?: number }
 
 /** In-memory stand-in implementing the subset of Redis commands Holdfast uses. */
 export class MemoryStore implements Store {
@@ -72,7 +73,7 @@ export class MemoryStore implements Store {
   private ensure<T extends Entry['t']>(key: string, t: T): Extract<Entry, { t: T }> {
     let e = this.get(key)
     if (!e) {
-      e = (t === 'string' ? { t, v: '' } : t === 'hash' ? { t, v: new Map() } : t === 'zset' ? { t, v: new Map() } : { t, v: new Set() }) as Entry
+      e = (t === 'string' ? { t, v: '' } : t === 'hash' || t === 'zset' ? { t, v: new Map() } : t === 'list' ? { t, v: [] } : { t, v: new Set() }) as Entry
       this.data.set(key, e)
     }
     if (e.t !== t) throw new Error('WRONGTYPE')
@@ -226,6 +227,24 @@ export class MemoryStore implements Store {
       case 'SMEMBERS': {
         const e = this.get(key)
         return e?.t === 'set' ? [...e.v] : []
+      }
+      case 'LPUSH': {
+        const e = this.ensure(key, 'list')
+        for (const v of a.slice(2)) e.v.unshift(v)
+        return e.v.length
+      }
+      case 'LTRIM': {
+        const e = this.get(key)
+        if (e?.t !== 'list') return 'OK'
+        const stop = Number(a[3]) < 0 ? e.v.length + Number(a[3]) : Number(a[3])
+        e.v = e.v.slice(Number(a[2]), stop + 1)
+        return 'OK'
+      }
+      case 'LRANGE': {
+        const e = this.get(key)
+        if (e?.t !== 'list') return []
+        const stop = Number(a[3]) < 0 ? e.v.length + Number(a[3]) : Number(a[3])
+        return e.v.slice(Number(a[2]), stop + 1)
       }
       default:
         throw new Error(`MemoryStore: unsupported command ${op}`)

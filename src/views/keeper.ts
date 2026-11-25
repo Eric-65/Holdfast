@@ -6,7 +6,8 @@ import { encodeKeeper, nimiqPaymentUri, type KeeperPayload } from '../lib/share'
 import { connectNimiqPay, errorMessage, insideNimiqPay, isUserRejection, type Wallet } from '../lib/wallet'
 import { $, $$, busy, copyText, html, ring, toast } from '../ui'
 import { fiatRow, header, nim } from './common'
-import { eventRow } from './saver'
+import { cheersForGoal, eventRow } from './saver'
+import { goalSavings, walletBaselineKnown, type StoreState } from '../lib/store'
 
 const CHEERS_KEY = 'holdfast.cheers.v1'
 const MAX_DATA_BYTES = 64
@@ -30,9 +31,13 @@ function addCheer(addr: string, luna: number): void {
   }
 }
 
-/** Truncate a message so the transaction data (prefix + message) fits in Nimiq's data limit. */
-export function cheerData(message: string): string {
-  const prefix = 'Holdfast cheer: '
+/**
+ * The transaction message for a cheer, at most 64 bytes of UTF-8. With a goal id it names the goal
+ * ("Holdfast cheer <first 8 of id>: ..."), so the cheer shows on that goal only.
+ */
+export function cheerData(message: string, goalId?: string): string {
+  const tag = goalId && /^[A-Za-z0-9]{6,32}$/.test(goalId) ? ` ${goalId.slice(0, 8)}` : ''
+  const prefix = `Holdfast cheer${tag}: `
   const enc = new TextEncoder()
   let msg = message.trim() || '💪'
   while (enc.encode(prefix + msg).length > MAX_DATA_BYTES) msg = [...msg].slice(0, -1).join('')
@@ -107,6 +112,45 @@ export function keeperBaselineKnown(g: { baselineFromChain?: boolean; baselineLu
   return p.b > 0
 }
 
+/**
+ * This goal's share of the saver's live stake, with the same rule the saver's own screen uses
+ * (goalSavings over every active goal). null when it can't be worked out from chain data: no
+ * backed-up wallet, a closed goal, or a wallet baseline that isn't known yet.
+ */
+export function keeperGoalShare(server: PublicGoal | null | undefined, liveActive: number | null): number | null {
+  const g = server?.goal
+  if (!g || g.status !== 'active' || liveActive === null) return null
+  const w = server.wallet
+  // Older backups (one goal, no wallet section): the goal's own starting stake is the wallet baseline.
+  const baselineKnown = w?.baselineFromChain ?? keeperBaselineKnown(g, { b: 0 })
+  const baseline = w?.baselineFromChain != null ? (w.baselineLuna ?? 0) : g.baselineLuna
+  const ledgers = w?.goals.length ? w.goals : [{ self: true, lockedLuna: g.lockedLuna, pendingLuna: g.pendingUnlock?.luna ?? 0, rewardLuna: g.rewardLuna ?? 0 }]
+  const state: StoreState = {
+    version: 1,
+    stakerCreated: true,
+    walletBaselineLuna: baseline,
+    walletBaselineFromChain: baselineKnown,
+    goals: ledgers.map((l, i) => ({
+      id: l.self ? 'self' : `other${i}`,
+      name: '',
+      emoji: '',
+      targetLuna: 0,
+      createdAt: 0,
+      baselineLuna: 0,
+      lockedLuna: l.lockedLuna,
+      rewardLuna: l.rewardLuna ?? 0,
+      validator: null,
+      status: 'active',
+      sealBrokenAt: null,
+      reachedAt: null,
+      pendingUnlock: l.pendingLuna ? { luna: l.pendingLuna, step: 'inactive', startedAt: 0 } : null,
+      events: [],
+    })),
+  }
+  if (!walletBaselineKnown(state)) return null
+  return goalSavings(state, liveActive).get('self') ?? null
+}
+
 export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
   const key = encodeKeeper(p)
   if (!data || data.key !== key || Date.now() - data.loadedAt > REFRESH_MS) load(p, key)
@@ -117,17 +161,19 @@ export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
   const name = g?.name ?? p.n
   const emoji = g?.emoji ?? p.e
   const target = g?.targetLuna ?? p.t
-  const baseline = g ? g.baselineLuna : p.b
   const createdAt = g?.createdAt ?? p.c
-  // On-chain stake only counts once the saver's starting stake is known; otherwise stake from
-  // before the goal would be counted toward it.
-  const chainOk = d.stake !== null && keeperBaselineKnown(g, p)
   const snapshot = g ? g.savedLuna : p.s
-  const saved = chainOk ? Math.max(0, d.stake!.balance - baseline) : snapshot
+  // With a backed-up goal: this goal's share of the live stake, divided like on the saver's screen.
+  // A link without a backup (older links) uses the stake above the starting stake in the link.
+  const share = d.server ? keeperGoalShare(d.server, d.stake ? d.stake.balance : null) : null
+  const linkOnly = !d.server && d.stake !== null && keeperBaselineKnown(null, p)
+  const chainOk = share !== null || linkOnly
+  const saved = share !== null ? share : linkOnly ? Math.max(0, d.stake!.balance - p.b) : snapshot
   // Small differences (rounding, a few rewards paid out) are noise, not a broken seal.
   const noise = Math.max(LUNA_PER_NIM, snapshot * 0.02)
-  const withdrawing = d.stake ? d.stake.inactiveBalance + d.stake.retiredBalance : (g?.pendingUnlock?.luna ?? 0)
-  const leaving = withdrawing > noise || (!!g?.pendingUnlock && withdrawing > 0) ? withdrawing : 0
+  // With a backup, "withdrawing" is this goal's own withdrawal; other goals don't affect it.
+  const withdrawing = g ? (g.pendingUnlock?.luna ?? 0) : d.stake ? d.stake.inactiveBalance + d.stake.retiredBalance : 0
+  const leaving = g ? withdrawing : withdrawing > noise ? withdrawing : 0
   const sealBrokenAt = g?.sealBrokenAt ?? p.x ?? null
   // Stake that disappeared since the last update, without a withdrawal through Holdfast.
   const dropped = chainOk && snapshot - saved > noise
@@ -137,7 +183,7 @@ export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
   const percent = pct(saved, target)
   const sent = cheersSent(p.a)
   const owner = d.server?.owner.name ?? p.w ?? null
-  const cheers = (d.cheers ?? []).filter((c) => c.at >= createdAt)
+  const cheers = cheersForGoal(d.cheers ?? [], { id: p.g ?? '', createdAt })
   const cheersLuna = cheers.reduce((a, c) => a + c.luna, 0)
   const source = d.stakeLoading && d.stake === null
     ? 'Checking the blockchain…'
@@ -154,7 +200,7 @@ export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
       <p class="eyebrow">${owner ? html`You're <b>${owner}</b>'s Goalkeeper` : "You're the Goalkeeper for"}</p>
       <section class="goal-hero ${broken ? 'broken' : ''} ${reached ? 'reached' : ''}">
         <div class="ring-wrap">
-          ${ring(percent)}
+          ${ring(percent, 184, 14, '', 'keeper')}
           <div class="ring-center"><div class="goal-emoji">${emoji}</div><div class="ring-pct">${Math.floor(percent)}%</div></div>
         </div>
         <h1 class="goal-name">${name}</h1>
@@ -247,11 +293,11 @@ export function renderKeeper(root: HTMLElement, p: KeeperPayload): void {
     void busy(btn, 'Opening wallet…', async () => {
       if (!friendWallet && insideNimiqPay()) friendWallet = await connectNimiqPay(8000)
       if (!friendWallet) {
-        location.href = nimiqPaymentUri(p.a, toNim(luna), cheerData(message))
+        location.href = nimiqPaymentUri(p.a, toNim(luna), cheerData(message, p.g))
         return
       }
       try {
-        await friendWallet.sendBasicTransactionWithData({ recipient: formatAddress(p.a), value: luna, data: cheerData(message) })
+        await friendWallet.sendBasicTransactionWithData({ recipient: formatAddress(p.a), value: luna, data: cheerData(message, p.g) })
         addCheer(p.a, luna)
         toast('Cheer sent! 🎉', 'success')
         emit(true)

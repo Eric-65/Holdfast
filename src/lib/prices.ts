@@ -1,4 +1,5 @@
 import { config } from './config'
+import { timeoutSignal } from './net'
 
 export type Rates = Record<string, number> & { at?: never }
 export interface PriceState {
@@ -40,7 +41,7 @@ export async function getPrices(): Promise<PriceState | null> {
   const cached = readCache()
   if (cached && Date.now() - cached.updatedAt < MAX_AGE) return { ...cached, stale: false }
   try {
-    const res = await fetch(config.priceApiUrl, { headers: { Accept: 'application/json' } })
+    const res = await fetch(config.priceApiUrl, { headers: { Accept: 'application/json' }, signal: timeoutSignal(8_000) })
     const rates = res.ok ? parsePriceResponse(await res.json()) : null
     if (rates) {
       const state = { rates, updatedAt: Date.now(), stale: false }

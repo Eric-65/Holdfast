@@ -1,4 +1,5 @@
 import { config } from './config'
+import { timeoutSignal } from './net'
 
 export interface StakerInfo {
   address: string
@@ -8,6 +9,8 @@ export interface StakerInfo {
   inactiveBalance: number
   inactiveFrom: number | null
   retiredBalance: number
+  /** Whether the address is a staker at all (a staker must exist before stake can be added). */
+  exists: boolean
 }
 
 export interface Validator {
@@ -39,22 +42,38 @@ export const readFreshFor = (ms: number): void => {
   freshUntil = Math.max(freshUntil, Date.now() + ms)
 }
 
-const timeout = (ms: number): AbortSignal | undefined =>
-  typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined
+const timeout = timeoutSignal
+
+/** An error reported by the RPC server itself (it answered), as opposed to no answer at all. */
+export class ChainAnswerError extends Error {}
+
+/**
+ * VITE_NIMIQ_RPC_URL lets the app call an RPC server straight from the phone. Most public servers
+ * don't allow that (browsers block it, CORS), so after the first failed call Holdfast uses its own
+ * relay for the rest of the visit.
+ */
+let directOk = true
+/** Why the last blockchain read failed, for the goal screen's details. */
+export let lastChainError = ''
 
 let rpcId = 1
 async function rpc<T>(method: string, params: string[], net: Net = defaultNet): Promise<T> {
-  if (config.rpcUrl) {
-    const res = await fetch(config.rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }),
-      signal: timeout(10_000),
-    })
-    const json = await res.json()
-    if (json.error) throw new Error(json.error.data || json.error.message || 'RPC error')
-    // Albatross RPC wraps results as { data, metadata }.
-    return (json.result && 'data' in json.result ? json.result.data : json.result) as T
+  if (config.rpcUrl && directOk) {
+    try {
+      const res = await fetch(config.rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }),
+        signal: timeout(10_000),
+      })
+      const json = await res.json()
+      if (json.error) throw new ChainAnswerError(json.error.data || json.error.message || 'RPC error')
+      // Albatross RPC wraps results as { data, metadata }.
+      return (json.result && 'data' in json.result ? json.result.data : json.result) as T
+    } catch (err) {
+      if (err instanceof ChainAnswerError) throw err
+      directOk = false // blocked or unreachable from the phone: use the relay from now on
+    }
   }
   if (!relayOk) throw new Error('No blockchain access')
   const q = new URLSearchParams({ a: 'rpc', m: method, net })
@@ -71,7 +90,7 @@ async function rpc<T>(method: string, params: string[], net: Net = defaultNet): 
   if (typeof json.error === 'string') throw new Error(json.message || json.error)
   if (json.error) {
     const e = json.error as { data?: string; message?: string }
-    throw new Error(e.data || e.message || 'RPC error')
+    throw new ChainAnswerError(e.data || e.message || 'RPC error')
   }
   return json.result as T
 }
@@ -91,11 +110,20 @@ export async function getStaker(address: string, net: Net = defaultNet): Promise
     const s = await rpc<Record<string, unknown> | null>('getStakerByAddress', [address.replace(/\s/g, '')], net)
     return normalizeStaker(address, s)
   } catch (e) {
-    const msg = String((e as Error).message || e).toLowerCase()
-    if (msg.includes('not found') || msg.includes('no staker') || msg.includes('does not exist'))
-      return normalizeStaker(address, null)
+    const msg = String((e as Error).message || e)
+    // The server answered that this address doesn't stake (Nimiq Pay's second address usually
+    // doesn't): that is a reading of zero, not a failure.
+    if (e instanceof ChainAnswerError && isNotAStaker(msg)) return normalizeStaker(address, null)
+    lastChainError = msg.slice(0, 160)
     return null
   }
+}
+
+/** Messages RPC servers use for "this address has no stake". */
+export function isNotAStaker(message: string): boolean {
+  // "Method not found" means the server can't answer at all: that is a failed read, never zero stake.
+  if (/method|rpc|internal|timeout|unavailable/i.test(message)) return false
+  return /not\s*found|no\s*staker|not\s*a\s*staker|does\s*not\s*exist|doesn't\s*exist|unknown\s*(staker|account)|no\s*such/i.test(message)
 }
 
 export function normalizeStaker(address: string, s: Record<string, unknown> | null): StakerInfo {
@@ -107,6 +135,7 @@ export function normalizeStaker(address: string, s: Record<string, unknown> | nu
     inactiveBalance: n(s?.inactiveBalance),
     inactiveFrom: typeof s?.inactiveFrom === 'number' ? (s.inactiveFrom as number) : null,
     retiredBalance: n(s?.retiredBalance),
+    exists: s !== null && typeof s === 'object',
   }
 }
 
@@ -125,6 +154,40 @@ export async function getStakeTotals(addresses: string[], net: Net = defaultNet)
     balance: all.reduce((a, s) => a + s.balance, 0),
     inactiveBalance: all.reduce((a, s) => a + s.inactiveBalance, 0),
     retiredBalance: all.reduce((a, s) => a + s.retiredBalance, 0),
+    exists: all.some((s) => s.exists),
+  }
+}
+
+/**
+ * What the network says about a transaction. `found: false` = not on the chain (yet).
+ * `executed: false` = included, but the network refused it, so nothing happened except the fee.
+ * `executed: null` = the server didn't say. null overall = the network couldn't be asked.
+ */
+export async function getTransactionOutcome(hash: string, net: Net = defaultNet): Promise<{ found: boolean; executed: boolean | null } | null> {
+  if (!chainAvailable() || !/^[0-9a-f]{64}$/i.test(hash)) return null
+  try {
+    const t = await rpc<Record<string, unknown> | null>('getTransactionByHash', [hash.toLowerCase()], net)
+    if (!t) return { found: false, executed: null }
+    return { found: true, executed: typeof t.executionResult === 'boolean' ? t.executionResult : null }
+  } catch (e) {
+    if (e instanceof ChainAnswerError && /not\s*found/i.test(String((e as Error).message))) return { found: false, executed: null }
+    return null
+  }
+}
+
+/** Addresses of the validators a new staker can delegate to, straight from the network. */
+export async function getActiveValidatorAddresses(net: Net = defaultNet): Promise<string[]> {
+  if (!chainAvailable()) return []
+  try {
+    const list = await rpc<unknown>('getActiveValidators', [], net)
+    const out: string[] = []
+    for (const v of Array.isArray(list) ? list : []) {
+      const a = typeof v === 'string' ? v : (v as { address?: unknown })?.address
+      if (typeof a === 'string') out.push(a)
+    }
+    return out
+  } catch {
+    return []
   }
 }
 
@@ -145,6 +208,8 @@ export interface Cheer {
   /** Block time (ms). */
   at: number
   hash: string
+  /** First 8 characters of the goal id the cheer was sent to, when the sender's link named one. */
+  goal?: string
 }
 
 /**
@@ -194,7 +259,7 @@ export function parseValidators(json: unknown): Validator[] {
 
 export async function fetchValidators(): Promise<Validator[]> {
   try {
-    const res = await fetch(config.validatorsApiUrl, { headers: { Accept: 'application/json' } })
+    const res = await fetch(config.validatorsApiUrl, { headers: { Accept: 'application/json' }, signal: timeout(10_000) })
     if (!res.ok) return []
     return parseValidators(await res.json())
   } catch {

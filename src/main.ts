@@ -5,12 +5,16 @@ import { captureInviteCode, wasWelcomed } from './lib/identity'
 import { decodeKeeper } from './lib/share'
 import { initTheme, syncToggle, toggleTheme } from './lib/theme'
 import { connectNimiqPay, errorMessage, insideNimiqPay, isUserRejection } from './lib/wallet'
-import { html, toast } from './ui'
+import { checkForUpdate, installErrorReporting } from './lib/report'
+import { html, reapplyBusy, toast } from './ui'
 import { header } from './views/common'
+import { introClosed, showIntroOnce } from './views/intro'
 import { renderKeeper } from './views/keeper'
-import { renderConnectFailed, renderConnecting, renderHome, renderLanding } from './views/saver'
+import { renderStats } from './views/stats'
+import { checkLocksOnOpen, renderConnectFailed, renderConnecting, renderGoalDetail, renderHome, renderLanding, renderNewGoalScreen } from './views/saver'
 import { openWelcomeSheet, renderBoard, renderProfile, tabBar } from './views/social'
 
+installErrorReporting()
 const root = document.getElementById('app')!
 initTheme()
 // Every change to the goals is backed up to the profile (when signed in), so it survives a new
@@ -42,6 +46,7 @@ function route(): void {
   const social = !!ctx.wallet && ctx.apiAvailable === true
   document.body.classList.toggle('has-tabs', social && tab !== null)
   if (social && tab) root.insertAdjacentHTML('beforeend', tabBar(tab).html)
+  reapplyBusy()
 }
 
 function renderRoute(): 'goal' | 'board' | 'me' | null {
@@ -55,10 +60,14 @@ function renderRoute(): 'goal' | 'board' | 'me' | null {
         <p class="muted">Ask your friend to share it again.</p><a class="btn btn-secondary" href="#/">Open Holdfast</a></main>`.html
     return null
   }
-  // The leaderboard is public: it works with or without a wallet.
+  // The leaderboard and the usage numbers are public: they work with or without a wallet.
   if (hash.startsWith('/board') && ctx.apiAvailable !== false) return renderBoard(root), 'board'
+  if (hash.startsWith('/stats')) return renderStats(root), 'board'
   if (ctx.wallet) {
     if (hash.startsWith('/me') && ctx.apiAvailable !== false) return renderProfile(root), 'me'
+    if (hash === '/new') return renderNewGoalScreen(root), 'goal'
+    const goal = hash.match(/^\/goal\/([A-Za-z0-9]{6,32})$/)
+    if (goal) return renderGoalDetail(root, goal[1]!), 'goal'
     return renderHome(root), 'goal'
   }
   if (conn === 'connecting') renderConnecting(root)
@@ -152,7 +161,10 @@ async function connect(): Promise<void> {
     // If the answer arrives after the timeout it still connects, unless a wallet is already attached.
     if (ctx.wallet) return
     await attachWallet(wallet)
+    // First connect on this device: three short cards on what Holdfast is (skippable, once).
+    if (!location.hash.startsWith('#/keep/')) void showIntroOnce()
     void startAccount()
+    void checkLocksOnOpen()
   } catch (err) {
     fail(
       isUserRejection(err)
@@ -171,6 +183,8 @@ async function startAccount(): Promise<void> {
   // Already has a profile but no inviter yet: an invite link opened now still counts.
   const inviter = await claimPendingInvite()
   if (inviter) toast(`🎉 ${inviter} is now your inviter`, 'success')
+  // The profile offer waits until the intro cards are closed.
+  await introClosed()
   const address = ctx.address
   if (!address || ctx.profileStatus !== 'signed_out' || wasWelcomed(address)) return
   if (location.hash.startsWith('#/keep/') || document.querySelector('.sheet-backdrop')) return
@@ -179,6 +193,7 @@ async function startAccount(): Promise<void> {
 
 async function boot(): Promise<void> {
   route()
+  window.setTimeout(() => void checkForUpdate(), 4000)
   void refreshPrices()
   void loadInvite(arrivedByInvite)
   // Friends opening a Goalkeeper link don't need to connect a wallet up front.
@@ -194,12 +209,21 @@ async function boot(): Promise<void> {
   if (late && !ctx.wallet) void connect()
 }
 
+// While a goal screen is open, read the stake again every 30 seconds, so a busy network
+// recovers to live numbers on its own.
+window.setInterval(() => {
+  const onGoals = !/^#\/(me|board|keep\/)/.test(location.hash)
+  if (ctx.wallet && onGoals && document.visibilityState === 'visible' && !document.querySelector('.sheet-backdrop')) void refreshChain()
+}, 30_000)
+
 document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void checkForUpdate()
   if (document.visibilityState === 'visible' && ctx.wallet) {
     void refreshChain()
     void refreshPrices()
     void refreshCheers()
     void refreshProfile(15_000)
+    void checkLocksOnOpen()
   }
 })
 

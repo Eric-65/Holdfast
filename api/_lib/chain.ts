@@ -11,7 +11,7 @@ export const cleanNet = (v: unknown): Net => (v === 'testnet' ? 'testnet' : 'mai
 
 export function rpcUrlFor(net: Net, env: Record<string, string | undefined> = process.env): string {
   return net === 'testnet'
-    ? env.NIMIQ_TESTNET_RPC_URL || 'https://rpc.nimiq-testnet.com'
+    ? env.NIMIQ_TESTNET_RPC_URL || 'https://rpc.testnet.nimiqwatch.com'
     : env.NIMIQ_RPC_URL || 'https://rpc.nimiqwatch.com'
 }
 
@@ -72,6 +72,8 @@ const METHODS: Record<string, { param: (p: string | null) => unknown[] | null; c
     cacheS: 10,
   },
   getTransactionByHash: { param: (p) => (p && /^[0-9a-f]{64}$/i.test(p) ? [p.toLowerCase()] : null), cacheS: 30 },
+  // The validators a new staker can delegate to (used on testnet, where the validators API has none).
+  getActiveValidators: { param: () => [], cacheS: 300 },
 }
 
 export interface RelayRequest {
@@ -102,6 +104,17 @@ export async function relay(
 // ---------- Cheers ----------
 
 export const CHEER_PREFIX = 'Holdfast cheer: '
+/**
+ * Cheer messages: "Holdfast cheer: <message>" (older links) or "Holdfast cheer <goal>: <message>",
+ * where <goal> is the first 8 characters of the goal id the cheer was sent to.
+ */
+const CHEER_RE = /^Holdfast cheer(?: ([A-Za-z0-9]{1,8}))?: ([\s\S]*)$/
+
+export function parseCheerText(text: string): { goal?: string; message: string } | null {
+  const m = CHEER_RE.exec(text)
+  if (!m) return null
+  return { ...(m[1] ? { goal: m[1] } : {}), message: m[2]!.slice(0, 48) }
+}
 
 export interface Cheer {
   /** Shortened sender address. */
@@ -111,6 +124,8 @@ export interface Cheer {
   /** Block time (ms). */
   at: number
   hash: string
+  /** The goal the cheer was sent to (first 8 characters of its id), when named. */
+  goal?: string
 }
 
 /** Decode transaction data (hex) to text; null if it is not hex or not valid UTF-8. */
@@ -135,16 +150,18 @@ export function parseCheers(address: string, txs: unknown): Cheer[] {
     const from = normalizeAddress(tx.from)
     if (!to || !from || compact(to) !== me) continue
     const text = hexToText(tx.recipientData) ?? hexToText(tx.data)
-    if (!text?.startsWith(CHEER_PREFIX)) continue
+    const cheer = text ? parseCheerText(text) : null
+    if (!cheer) continue
     const luna = Number(tx.value)
     const hash = typeof tx.hash === 'string' ? tx.hash : ''
     if (!Number.isFinite(luna) || luna <= 0 || !hash) continue
     out.push({
       from: shortAddr(from),
       luna,
-      message: text.slice(CHEER_PREFIX.length).slice(0, 48),
+      message: cheer.message,
       at: Number(tx.timestamp) || 0,
       hash,
+      ...(cheer.goal ? { goal: cheer.goal } : {}),
     })
   }
   return out.sort((a, b) => b.at - a.at)
@@ -175,4 +192,35 @@ export async function fetchCheers(
     }
   }
   return { cheers: parseCheers(address, txs).slice(0, 50) }
+}
+
+/**
+ * Everything staked by these addresses right now (active, inactive and retired), in luna, read
+ * from the blockchain. An address with no staker counts as 0. Null when any read fails.
+ */
+export async function stakedOnChain(
+  transport: RpcTransport,
+  accounts: string[],
+  net: Net,
+  env: Record<string, string | undefined> = process.env,
+): Promise<number | null> {
+  const url = rpcUrlFor(net, env)
+  try {
+    const each = await Promise.all(
+      accounts.map(async (a) => {
+        try {
+          const s = await callRpc<Record<string, unknown> | null>(transport, url, 'getStakerByAddress', [compact(a)])
+          if (!s) return 0
+          const n = (k: string) => (typeof s[k] === 'number' && Number.isFinite(s[k]) ? (s[k] as number) : 0)
+          return n('balance') + n('inactiveBalance') + n('retiredBalance')
+        } catch (err) {
+          if (err instanceof RpcError && /no staker/i.test(err.message)) return 0
+          throw err
+        }
+      }),
+    )
+    return each.reduce((a, n) => a + n, 0)
+  } catch {
+    return null
+  }
 }

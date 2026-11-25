@@ -1,18 +1,26 @@
-import { ctx, commit, readLiveStake, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues } from '../app'
+import { ctx, clearExpectedStake, commit, emit, estimatedBlock, expectStakeChange, readLiveStake, refreshBalance, refreshChain, refreshCheers, loadValidators, fiatValues, verifyLocks } from '../app'
 import { backupNow } from '../account'
-import { chainAvailable, readFreshFor } from '../lib/chain'
+import { chainAvailable, getStaker, getTransactionOutcome, lastChainError, readFreshFor, type Cheer } from '../lib/chain'
 import { formatFiat, formatNim, formatAddress, isValidAddress, parseNimInput, pct, shortAddress, timeAgo, toLuna, toNim } from '../lib/format'
 import {
-  activeGoal,
-  baselineUnknown,
+  activeGoals,
+  checkpointRewards,
+  closeGoalInState,
+  confirmLock,
+  rejectLock,
+  startGoalWithdrawal,
   createGoal,
+  goalSavings,
+  isWithdrawn,
+  ledgerOf,
+  MAX_ACTIVE_GOALS,
+  walletBaselineKnown,
   markReachedIfDone,
   recordLock,
   recordRelease,
   recordRetire,
-  recordUnlockStart,
   replaceGoal,
-  savedLuna,
+  retireReadyBlock,
   type Goal,
   type GoalEvent,
 } from '../lib/store'
@@ -20,7 +28,7 @@ import { keeperUrl, type KeeperPayload } from '../lib/share'
 import { errorMessage, hostNetwork, isUserRejection } from '../lib/wallet'
 import { isMobileDevice, miniAppTarget, miniAppUrl, NIMIQ_PAY_INSTALL_URL, nimiqPayDeepLink } from '../lib/deeplink'
 import { pendingInviteCode } from '../lib/identity'
-import { $, $$, busy, copyText, html, openSheet, raw, ring, toast, type Raw } from '../ui'
+import { $, $$, burst, busy, copyText, html, openSheet, raw, ring, skeleton, toast, type Raw } from '../ui'
 import { fiatRow, header, nim } from './common'
 
 const EMOJIS = ['🎯', '🏠', '🎓', '✈️', '🚗', '💍', '📱', '🛡️', '👶', '💻', '🏥', '🎁']
@@ -74,7 +82,7 @@ const FAQ: [string, string][] = [
   ],
   [
     'Can I take my money out?',
-    'Always. Tap Break the seal, type the goal name to confirm, and Holdfast walks you through the three unstaking steps. The Nimiq network adds a cool-down before the NIM is back in your balance, and your Goalkeeper sees that you withdrew.',
+    'Always. Tap Break the seal, type the goal name to confirm, and Holdfast walks you through the three unstaking steps. The Nimiq network adds a cool-down of 12 to 24 hours before the NIM is back in your balance, and your Goalkeeper sees that you withdrew.',
   ],
   [
     'What does my Goalkeeper see?',
@@ -90,15 +98,44 @@ const FAQ: [string, string][] = [
   ],
 ]
 
+/** 950 → "950", 12,400 → "12.4K", 100,000 → "100K", 2,500,000 → "2.5M": always fits a small tile. */
+export function compactNumber(n: number): string {
+  const units: [number, string][] = [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']]
+  for (const [size, suffix] of units) {
+    if (n >= size) {
+      const v = n / size
+      return `${v >= 100 ? Math.floor(v) : Math.floor(v * 10) / 10}${suffix}`
+    }
+  }
+  return String(Math.floor(n))
+}
+
 /** Live usage numbers, shown once there is something to show. */
-export function statsStrip(): Raw {
+export function statsStrip(between: Raw = html``): Raw {
   const st = ctx.stats
-  if (!st || st.savers < 1) return html``
-  return html`<p class="stats-strip" aria-label="Holdfast in numbers">
-    <span><b>${st.savers.toLocaleString('en-US')}</b> ${st.savers === 1 ? 'saver' : 'savers'}</span>
-    <span><b>${st.activeGoals.toLocaleString('en-US')}</b> active ${st.activeGoals === 1 ? 'goal' : 'goals'}</span>
-    <span><b>${formatNim(st.lockedLuna)}</b> NIM locked</span>
-  </p>`
+  // No numbers (yet, or no profile service): whatever goes between them still shows.
+  if (!st || st.savers < 1) return between
+  const tile = (value: string, label: string, full: string) =>
+    html`<li class="stats-tile" title="${full}"><b>${value}</b><span class="stats-label">${label}</span></li>`
+  const nim = Math.floor(toNim(st.lockedLuna))
+  return html`<ul class="stats-strip" aria-label="Holdfast in numbers">
+    ${tile(compactNumber(st.savers), st.savers === 1 ? 'saver' : 'savers', `${st.savers.toLocaleString('en-US')} savers`)}
+    ${tile(compactNumber(st.activeGoals), st.activeGoals === 1 ? 'active goal' : 'active goals', `${st.activeGoals.toLocaleString('en-US')} active goals`)}
+    ${tile(compactNumber(nim), 'NIM locked', `${nim.toLocaleString('en-US')} NIM locked`)}
+  </ul>
+  ${between}
+  <p class="stats-note">Totals for all savers · NIM locked is checked on-chain<br/><a href="#/stats">See all the numbers →</a></p>`
+}
+
+/**
+ * A landing-page photo (Pixabay, free licence): WebP at 600 and 1200 px wide, a JPEG fallback, and
+ * its size set so the page doesn't jump while it loads. The landing page keeps exactly two.
+ */
+function photo(name: string, alt: string, w: number, h: number, cls = '', eager = false): Raw {
+  return html`<picture class="l-photo ${cls}">
+    <source srcset="/photos/${name}-600.webp 600w, /photos/${name}.webp 1200w" sizes="(max-width: 520px) calc(100vw - 32px), 488px" type="image/webp"/>
+    <img src="/photos/${name}.jpg" alt="${alt}" width="${w}" height="${h}" ${raw(eager ? 'fetchpriority="high"' : 'loading="lazy"')} decoding="async"/>
+  </picture>`
 }
 
 export function renderLanding(root: HTMLElement): void {
@@ -124,7 +161,7 @@ export function renderLanding(root: HTMLElement): void {
       <h1>Save it. Stake it. <span class="gold">Hold fast.</span></h1>
       <p class="lead">Lock savings goals by staking NIM from your own wallet. It earns rewards, stays yours,
         and a trusted friend keeps you honest.</p>
-      ${statsStrip()}
+      ${statsStrip(photo('portrait', 'A smiling young woman lying back, looking up at the camera', 1200, 800, 'l-photo-hero', true))}
       <div id="open-help" class="open-help ${mobile ? 'hidden' : ''}">
         <p><b>${mobile ? 'Nothing happened?' : 'On a computer?'}</b>
           ${mobile ? 'Nimiq Pay may not be installed, or your browser blocked the link.' : 'Open this page on the phone where Nimiq Pay is installed, or:'}</p>
@@ -139,7 +176,7 @@ export function renderLanding(root: HTMLElement): void {
     </section>
 
     <section class="l-panel" aria-label="Saving without Holdfast">
-      <h3 class="l-label">Your savings, most months</h3>
+      <p class="l-label">Your savings, most months</p>
       <div class="bubbles">
         <p>I'll just borrow 20 from savings</p>
         <p class="right">putting it back on Friday</p>
@@ -149,8 +186,9 @@ export function renderLanding(root: HTMLElement): void {
       </div>
     </section>
 
-    <section class="l-panel" aria-label="The same month with Holdfast">
-      <h3 class="l-label">The same month in Holdfast</h3>
+    <section class="l-panel l-panel-photo" aria-label="The same month with Holdfast">
+      ${photo('leaf', 'A golden leaf with a small heart-shaped hole, lit by the sun', 1200, 900, 'l-photo-leaf')}
+      <p class="l-label">The same month in Holdfast</p>
       <ul class="l-rows">
         <li><span>500 NIM locked for Rent buffer</span><span class="chip chip-lock">Sealed</span></li>
         <li><span>Staking rewards on your goal</span><span class="chip chip-good">Earning</span></li>
@@ -180,7 +218,7 @@ export function renderLanding(root: HTMLElement): void {
 
     <section class="l-block">
       <div class="l-panel">
-        <h3 class="l-label">Rent buffer, 37% there</h3>
+        <p class="l-label">Rent buffer, 37% there</p>
         <ul class="l-rows worth">
           <li><span>NIM</span><b>1,500</b></li>
           <li><span>USDT</span><b>1.80</b></li>
@@ -191,14 +229,25 @@ export function renderLanding(root: HTMLElement): void {
       <p class="lead">Every goal shows in NIM, USDT and naira, and you can set your target in whichever one you think in.</p>
     </section>
 
+    <section class="l-block l-nimiq" aria-labelledby="built-on-nimiq">
+      <h2 id="built-on-nimiq">Built on Nimiq</h2>
+      <p class="lead">NIM does more here than move from one wallet to another.</p>
+      <ul class="l-rows nimiq-rows">
+        <li><span><b>Staking is the lock.</b> A goal is real stake in your own wallet, created and released with Nimiq's staking transactions.</span></li>
+        <li><span><b>Confirmed on chain.</b> Every lock and withdrawal step is checked on the Nimiq blockchain before Holdfast counts it.</span></li>
+        <li><span><b>Cheers with on-chain messages.</b> A friend's cheer is a NIM payment carrying a message, read back from the blockchain.</span></li>
+        <li><span><b>Wallet-signed profiles.</b> One message signed in Nimiq Pay proves your profile is yours. No password, no email.</span></li>
+      </ul>
+    </section>
+
     <section class="l-faq">
-      <h2>FAQs</h2>
+      <h2>Questions</h2>
       ${FAQ.map(([q, a]) => html`<details class="faq"><summary><span>${q}</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary><p>${a}</p></details>`)}
     </section>
 
     <section class="l-end">
       ${openButton('', '', 'Open in Nimiq Pay ↗')}
-      ${ctx.apiAvailable ? html`<a class="btn btn-ghost" href="#/board">🏆 See the leaderboard</a>` : ''}
+      ${ctx.apiAvailable ? html`<a class="btn btn-ghost" href="#/board">🏆 See the leaderboard</a><a class="btn btn-link" href="#/stats">Holdfast in numbers</a>` : ''}
       <p class="muted small center">Holdfast is non-custodial. It never holds your NIM.</p>
     </section>
   </main></div>`.html
@@ -244,10 +293,110 @@ export function renderConnectFailed(root: HTMLElement, message: string, onRetry:
 
 // ---------- Home (connected) ----------
 
+/** #/ — the goals list, or the new-goal form when there are none. */
 export function renderHome(root: HTMLElement): void {
-  const goal = activeGoal(ctx.state)
-  if (goal) return renderGoal(root, goal)
+  if (!activeGoals(ctx.state).length) return renderNewGoal(root)
+  renderGoalsList(root)
+}
+
+/** #/new — start another goal. */
+export function renderNewGoalScreen(root: HTMLElement): void {
+  if (activeGoals(ctx.state).length >= MAX_ACTIVE_GOALS) {
+    location.hash = '#/'
+    toast(`You can have up to ${MAX_ACTIVE_GOALS} goals at once`, 'info')
+    return
+  }
   renderNewGoal(root)
+}
+
+/** #/goal/<id> — one goal. An unknown or closed goal goes back to the list. */
+export function renderGoalDetail(root: HTMLElement, id: string): void {
+  const goal = ctx.state.goals.find((g) => g.id === id && g.status === 'active')
+  if (!goal) {
+    if (location.hash !== '#/') location.replace('#/')
+    return renderHome(root)
+  }
+  renderGoal(root, goal)
+}
+
+/** Saved amount for every active goal, from the live stake when it can be read. */
+const savingsNow = (): Map<string, number> => goalSavings(ctx.state, ctx.stake ? ctx.stake.balance : null)
+const isLive = (): boolean => !!ctx.stake && walletBaselineKnown(ctx.state)
+
+// "Why?" next to "Network busy" shows the exact answer from the network (one listener for every screen).
+document.addEventListener('click', (e) => {
+  const why = (e.target as Element).closest?.('.btn-why') as HTMLElement | null
+  if (why) toast(`Network said: ${why.dataset.why}`, 'info')
+})
+
+/** Where the numbers come from, said plainly. */
+function sourceLine(): string {
+  if (isLive()) return 'Live from the Nimiq blockchain'
+  if (ctx.stake) return 'From your Holdfast records (checking your starting stake…)'
+  if (chainAvailable()) return 'Network busy, showing your Holdfast records'
+  return 'From your Holdfast records'
+}
+
+function statusChip(goal: Goal): Raw {
+  if (goal.reachedAt) return html`<span class="chip chip-good">🎉 Reached</span>`
+  if (goal.pendingUnlock) return html`<span class="chip chip-bad">⏳ Withdrawing</span>`
+  if (isWithdrawn(goal)) return html`<span class="chip chip-muted">↩️ Withdrawn</span>`
+  if (goal.sealBrokenAt) return html`<span class="chip chip-bad">⚠️ Seal broken</span>`
+  return html`<span class="chip chip-lock">🔒 Sealed</span>`
+}
+
+/** Cheers for one goal: tagged with it, or untagged and sent since it was created. */
+export function cheersForGoal(cheers: Cheer[], goal: { id: string; createdAt: number }): Cheer[] {
+  const tag = goal.id.slice(0, 8)
+  return cheers.filter((c) => (c.goal ? c.goal === tag : c.at >= goal.createdAt))
+}
+
+function renderGoalsList(root: HTMLElement): void {
+  const goals = activeGoals(ctx.state)
+  const savings = savingsNow()
+  // A lock can carry a goal over its target: celebrate it once.
+  for (const g of goals) {
+    const reached = markReachedIfDone(g, savings.get(g.id) ?? 0)
+    if (reached !== g) {
+      commit(replaceGoal(ctx.state, reached))
+      toast(`Goal reached: ${g.name}! 🎉`, 'success')
+      return
+    }
+  }
+  const total = goals.reduce((a, g) => a + (savings.get(g.id) ?? 0), 0)
+  const full = goals.length >= MAX_ACTIVE_GOALS
+  root.innerHTML = html`${header()}
+  <main class="page">
+    <section class="goals-total">
+      <p class="eyebrow">My goals</p>
+      <div class="big-amount">${nim(total)} <span class="muted">saved</span></div>
+      ${fiatRow(total)}
+      <p class="muted small">${sourceLine()}${
+        !ctx.stake && lastChainError ? html` <button type="button" class="btn-why" data-why="${lastChainError}">Why?</button>` : ''
+      }</p>
+    </section>
+    <ul class="goal-list">
+      ${goals.map((g) => {
+        const saved = savings.get(g.id) ?? 0
+        const p = pct(saved, g.targetLuna)
+        return html`<li><a class="goal-card ${g.reachedAt ? 'reached' : ''} ${g.sealBrokenAt || g.pendingUnlock ? 'broken' : ''}" href="#/goal/${g.id}">
+          <span class="goal-card-ring">${ring(p, 58, 6, '', `card-${g.id}`)}<span class="goal-card-emoji">${g.emoji}</span></span>
+          <span class="goal-card-body">
+            <b class="goal-card-name">${g.name}</b>
+            <span class="goal-card-amount"><b>${formatNim(saved)}</b> <span class="muted">/ ${formatNim(g.targetLuna)} NIM · ${Math.floor(p)}%</span></span>
+            ${statusChip(g)}
+          </span>
+          <span class="goal-card-go" aria-hidden="true">›</span>
+        </a></li>`
+      })}
+    </ul>
+    ${
+      full
+        ? html`<p class="muted small center">You can have up to ${MAX_ACTIVE_GOALS} goals at once.</p>`
+        : html`<a class="btn btn-secondary" href="#/new">+ New goal</a>`
+    }
+    ${pastGoals()}
+  </main>`.html
 }
 
 function pastGoals(): Raw {
@@ -262,15 +411,35 @@ function pastGoals(): Raw {
 
 // ---------- New goal ----------
 
+/** Whether this wallet already stakes (its validator is then fixed for every goal). */
+function walletStakes(): boolean {
+  return ctx.state.stakerCreated || (ctx.stake ? ctx.stake.balance + ctx.stake.inactiveBalance + ctx.stake.retiredBalance > 0 : false)
+}
+
+/** The validator this wallet's stake is delegated to, as far as Holdfast knows. */
+function walletValidator(): string | null {
+  return ctx.stake?.delegation ?? ctx.state.goals.find((g) => g.validator)?.validator ?? null
+}
+
+function validatorName(address: string | null): string {
+  if (!address) return 'your validator'
+  const compact = address.replace(/\s/g, '').toUpperCase()
+  const v = ctx.validators.find((x) => x.address.replace(/\s/g, '').toUpperCase() === compact)
+  return v?.name ?? shortAddress(address)
+}
+
 function renderNewGoal(root: HTMLElement): void {
   void loadValidators()
   const units = ['nim', ...ctx.fiats.filter((f) => ctx.prices?.rates[f])]
   const validatorOptions = ctx.validators.slice(0, 25)
+  const hasGoals = activeGoals(ctx.state).length > 0
+  const stakes = walletStakes()
   root.innerHTML = html`${header()}
   <main class="page">
+    ${hasGoals ? html`<a class="back-link" href="#/">← Back to my goals</a>` : ''}
     <section class="hero small">
-      <h1>Start a goal</h1>
-      <p class="lead">What are you holding fast for?</p>
+      <h1>${hasGoals ? 'New goal' : 'Start your first goal'}</h1>
+      <p class="lead">${hasGoals ? 'What are you holding fast for?' : 'No goals yet. Name what you are saving for and set a target; next you lock NIM into it.'}</p>
     </section>
     <form id="goal-form" class="card form" novalidate>
       <label>Goal name
@@ -286,7 +455,10 @@ function renderNewGoal(root: HTMLElement): void {
         </div>
         <span class="hint" id="target-hint">&nbsp;</span>
       </label>
-      <label>Validator <span class="muted small">(who your stake is delegated to)</span>
+      ${
+        stakes
+          ? html`<p class="hint">Your NIM is staked with <b>${validatorName(walletValidator())}</b>. Every goal uses this one stake.</p>`
+          : html`<label>Validator <span class="muted small">(who your stake is delegated to)</span>
         ${
           validatorOptions.length
             ? html`<select name="validator">${validatorOptions.map(
@@ -295,8 +467,9 @@ function renderNewGoal(root: HTMLElement): void {
             : html`<span class="hint">${ctx.validatorsLoaded ? 'Validator list unavailable. Paste a validator address:' : 'Loading validators…'}</span>`
         }
         <input name="validatorCustom" class="${validatorOptions.length ? 'hidden' : ''}" placeholder="NQ.. validator address" autocomplete="off" spellcheck="false"/>
-        <span class="hint">Only used if you are not staking yet. Your NIM stays in your wallet's staking account, not with Holdfast.</span>
-      </label>
+        <span class="hint">Your NIM stays in your wallet's staking account, not with Holdfast. All your goals use this validator.</span>
+      </label>`
+      }
       <button class="btn btn-primary" type="submit">Create goal</button>
     </form>
     ${pastGoals()}
@@ -304,8 +477,8 @@ function renderNewGoal(root: HTMLElement): void {
 
   const form = $<HTMLFormElement>('#goal-form', root)!
   const sel = form.elements.namedItem('validator') as HTMLSelectElement | null
-  const custom = form.elements.namedItem('validatorCustom') as HTMLInputElement
-  sel?.addEventListener('change', () => custom.classList.toggle('hidden', sel.value !== '__custom'))
+  const custom = form.elements.namedItem('validatorCustom') as HTMLInputElement | null
+  if (custom) sel?.addEventListener('change', () => custom.classList.toggle('hidden', sel!.value !== '__custom'))
   const hint = $('#target-hint', root)!
   const updateHint = () => {
     const luna = targetLuna(form)
@@ -322,14 +495,15 @@ function renderNewGoal(root: HTMLElement): void {
     const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim()
     const target = targetLuna(form)
     const emoji = (form.querySelector('input[name=emoji]:checked') as HTMLInputElement)?.value ?? '🎯'
-    let validator: string | null = sel && sel.value !== '__custom' ? sel.value : custom.value.trim()
+    let validator: string | null = stakes ? walletValidator() : sel && sel.value !== '__custom' ? sel.value : (custom?.value.trim() ?? '')
     if (!name) return toast('Give your goal a name', 'error')
     if (!target) return toast('Enter a target amount', 'error')
+    if (activeGoals(ctx.state).length >= MAX_ACTIVE_GOALS) return toast(`You can have up to ${MAX_ACTIVE_GOALS} goals at once`, 'info')
     if (validator && !isValidAddress(validator)) return toast('That validator address is not valid', 'error')
     validator = validator ? formatAddress(validator) : null
     void busy($<HTMLButtonElement>('button[type=submit]', form), 'Creating…', async () => {
-      // Stake you already have doesn't count toward a new goal, so read it first.
-      if (!ctx.stake && chainAvailable()) await refreshChain()
+      // Stake that belongs to no goal doesn't count toward a new one, so read it first.
+      if ((!ctx.stake || !walletBaselineKnown(ctx.state)) && chainAvailable()) await refreshChain()
       const goal = createGoal({
         name,
         emoji,
@@ -339,6 +513,7 @@ function renderNewGoal(root: HTMLElement): void {
         validator,
       })
       commit({ ...ctx.state, goals: [...ctx.state.goals, goal] })
+      location.hash = `#/goal/${goal.id}`
       toast('Goal created. Lock your first NIM!', 'success')
     })
   })
@@ -357,7 +532,7 @@ function targetLuna(form: HTMLFormElement): number | null {
 // ---------- Goal dashboard ----------
 
 function currentSaved(goal: Goal): number {
-  return savedLuna(goal, ctx.stake ? ctx.stake.balance : null)
+  return savingsNow().get(goal.id) ?? 0
 }
 
 function renderGoal(root: HTMLElement, goal: Goal): void {
@@ -371,18 +546,17 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
   // The lock form shows the wallet balance as a hint; this is the only screen that asks for it.
   void refreshBalance()
   void refreshCheers()
-  const cheers = (ctx.cheers ?? []).filter((c) => c.at >= goal.createdAt)
+  const cheers = cheersForGoal(ctx.cheers ?? [], goal)
   const cheersLuna = cheers.reduce((a, c) => a + c.luna, 0)
   const p = pct(saved, goal.targetLuna)
   const left = Math.max(0, goal.targetLuna - saved)
-  const rewards = ctx.stake && !baselineUnknown(goal) ? saved - goal.lockedLuna : 0
-  const live = !!ctx.stake && !baselineUnknown(goal)
-  const source = live ? 'Live from the Nimiq blockchain' : 'From your Holdfast ledger'
+  const rewards = isLive() ? saved - ledgerOf(goal) : 0
   root.innerHTML = html`${header()}
   <main class="page">
+    <a class="back-link" href="#/">← My goals</a>
     <section class="goal-hero ${goal.sealBrokenAt ? 'broken' : ''} ${goal.reachedAt ? 'reached' : ''}">
       <div class="ring-wrap">
-        ${ring(p)}
+        ${ring(p, 184, 14, '', `goal-${goal.id}`)}
         <div class="ring-center">
           <div class="goal-emoji">${goal.emoji}</div>
           <div class="ring-pct">${Math.floor(p)}%</div>
@@ -395,16 +569,25 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
         ${
           goal.reachedAt
             ? html`<span class="chip chip-good">🎉 Goal reached</span>`
-            : goal.sealBrokenAt
-              ? html`<span class="chip chip-bad">Seal broken ${timeAgo(goal.sealBrokenAt)}</span>`
+            : isWithdrawn(goal)
+              ? html`<span class="chip chip-muted">↩️ Withdrawn: the NIM is back in your wallet</span>`
+              : goal.sealBrokenAt
+                ? html`<span class="chip chip-bad">Seal broken ${timeAgo(goal.sealBrokenAt)}</span>`
               : html`<span class="chip chip-lock">🔒 Sealed · ${formatNim(left)} NIM to go</span>`
         }
         ${rewards > 0 ? html`<span class="chip chip-good">+${formatNim(rewards, { decimals: 2 })} NIM rewards</span>` : ''}
       </div>
-      <p class="muted small">${source}${ctx.stake ? '' : chainAvailable() ? ' (chain unreachable)' : ''}</p>
+      <p class="muted small">${sourceLine()}${
+        !ctx.stake && lastChainError ? html` <button type="button" class="btn-why" data-why="${lastChainError}">Why?</button>` : ''
+      }</p>
     </section>
 
     ${goal.pendingUnlock ? unlockCard(goal) : ''}
+    ${
+      isWithdrawn(goal)
+        ? html`<section class="card"><h3>Goal withdrawn</h3><p class="muted small">All of this goal's NIM is back in your wallet, so it no longer counts as an active goal or in NIM locked. Lock more below to start saving toward it again, or close it.</p></section>`
+        : ''
+    }
 
     <section class="card">
       <h3>Lock more NIM</h3>
@@ -435,7 +618,14 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
             }
             <p class="muted small">Cheers land in your wallet's normal balance. Locking them makes them part of your goal.</p>
           </section>`
-        : ''
+        : ctx.cheers === null
+          ? html`<section class="card cheers-card"><h3>🎉 Cheers</h3>${
+              ctx.cheersChecked ? html`<p class="muted">Cheers can't be loaded right now. They are safe in your wallet and show here once the network answers.</p>` : skeleton(2)
+            }</section>`
+          : html`<section class="card cheers-card empty-state">
+              <h3>🎉 No cheers yet</h3>
+              <p class="muted">Share your Goalkeeper link below. Your friend can cheer you on with NIM and a message, and it shows up here.</p>
+            </section>`
     }
 
     <section class="card keeper-card">
@@ -456,7 +646,7 @@ function renderGoal(root: HTMLElement, goal: Goal): void {
           ? ''
           : html`<button class="btn btn-danger-ghost" id="break">Break the seal (withdraw)</button>`
       }
-      <button class="btn btn-link" id="close-goal">${goal.reachedAt ? 'Finish goal & start a new one' : 'Close this goal'}</button>
+      <button class="btn btn-link" id="close-goal">${goal.reachedAt ? 'Finish this goal' : 'Close this goal'}</button>
     </section>
     <p class="footnote muted small">Wallet ${shortAddress(ctx.address ?? '')} · Holdfast is non-custodial and never holds your NIM.</p>
   </main>`.html
@@ -520,6 +710,7 @@ export function eventRow(e: GoalEvent): Raw {
     release: `↩️ ${formatNim(e.luna)} NIM back in wallet`,
     reached: `🎉 Goal reached`,
     shared: `🛡️ Goalkeeper link shared`,
+    rejected: `⚠️ Lock of ${formatNim(e.luna)} NIM refused by the network (nothing staked)`,
   }
   return html`<li class="ev ev-${e.type}"><span>${label[e.type]}</span><time class="muted small">${timeAgo(e.at)}</time></li>`
 }
@@ -527,43 +718,96 @@ export function eventRow(e: GoalEvent): Raw {
 async function lock(goal: Goal, luna: number): Promise<void> {
   const w = ctx.wallet
   if (!w) return
-  // Knowing whether this wallet already stakes decides which transaction Nimiq Pay is asked for.
-  if (!ctx.stake && chainAvailable()) await refreshChain()
-  const existingStaker =
-    ctx.state.stakerCreated || (ctx.stake ? ctx.stake.balance + ctx.stake.inactiveBalance + ctx.stake.retiredBalance > 0 : false)
+  // Nimiq has two staking transactions: one creates the staker (first time), one adds to an
+  // existing staker. Adding to a wallet that isn't a staker is refused by the network, so check
+  // first, fresh, and never guess.
+  readFreshFor(5_000)
+  const me = ctx.accounts[0] ? await getStaker(ctx.accounts[0]) : null
+  // If the network can't be read, locking still works: a lock the network has confirmed before
+  // proves the wallet is a staker. Without one, create the staker; if it already existed the
+  // network refuses that, the check below notices, and the NIM stays in the wallet.
+  const confirmedBefore = ctx.state.goals.some((g) => g.events.some((e) => e.type === 'lock' && e.ok))
+  const isStaker = me ? me.exists : confirmedBefore
   try {
     let tx: string
-    if (existingStaker) {
+    if (isStaker) {
       tx = await w.sendStakeTransaction({ value: luna })
     } else {
-      // A goal created before the validator list had loaded has no validator yet. Use the
-      // top-ranked one, which is also the form's default choice, and remember it on the goal.
-      let validator = goal.validator
+      // First stake: choose the validator. It must exist on the network the wallet runs on.
+      await loadValidators(true)
+      const known = new Set(ctx.validators.map((v) => v.address.replace(/\s/g, '').toUpperCase()))
+      const preferred = [goal.validator, walletValidator()].find((v) => v && known.has(v.replace(/\s/g, '').toUpperCase()))
+      const validator = preferred ?? (ctx.validators[0] ? formatAddress(ctx.validators[0].address) : null)
       if (!validator) {
-        await loadValidators(true)
-        validator = ctx.validators[0] ? formatAddress(ctx.validators[0].address) : null
-        if (!validator) {
-          toast("Couldn't load the validator list. Check your connection and try again.", 'error')
-          return
-        }
+        toast("Couldn't load the list of validators, so nothing was sent. Check your connection and try again.", 'error')
+        return
+      }
+      if (validator !== goal.validator) {
         const current = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
         commit(replaceGoal(ctx.state, { ...current, validator }))
       }
-      try {
-        tx = await w.sendNewStakerTransaction({ delegation: validator, value: luna })
-      } catch (err) {
-        // Already a staker (e.g. staked earlier in Nimiq Pay): add to the existing stake instead.
-        if (isUserRejection(err)) throw err
-        tx = await w.sendStakeTransaction({ value: luna })
-      }
+      tx = await w.sendNewStakerTransaction({ delegation: validator, value: luna })
     }
     const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
-    commit({ ...replaceGoal(ctx.state, recordLock(latest, luna, tx)), stakerCreated: true })
-    toast(`Locked ${formatNim(luna)} NIM. Hold fast! 🔒`, 'success')
+    // Record what every goal has earned so far first, so this lock doesn't move rewards between goals.
+    const before = checkpointRewards(ctx.state, ctx.stake ? ctx.stake.balance : null)
+    const current = before.goals.find((g) => g.id === goal.id) ?? latest
+    commit(replaceGoal(before, recordLock(current, luna, tx)))
+    expectStakeChange(luna)
+    toast(`Sent ${formatNim(luna)} NIM to stake. Waiting for the network to confirm…`, 'info')
     afterTransaction()
+    void watchLock(tx, luna)
   } catch (err) {
-    toast(isUserRejection(err) ? 'Cancelled' : `Could not lock: ${errorMessage(err)}`, isUserRejection(err) ? 'info' : 'error')
+    toast(isUserRejection(err) ? 'Cancelled' : (walletBusy(err) ?? `Could not lock: ${errorMessage(err)}`), isUserRejection(err) ? 'info' : 'error')
   }
+}
+
+/**
+ * When Holdfast opens: check recorded locks against the chain, and explain once if any were
+ * refused by the network (they are taken off the goals; nothing was staked).
+ */
+export async function checkLocksOnOpen(): Promise<void> {
+  const fixed = await verifyLocks()
+  if (!fixed.count) return
+  // Don't stack on top of another sheet (the profile welcome, say): wait until it's closed.
+  for (let i = 0; i < 600 && document.querySelector('.sheet-backdrop'); i++) await new Promise((r) => setTimeout(r, 500))
+  openSheet(
+    html`<h2>We corrected your goals</h2>
+      <p>${fixed.count === 1 ? 'One lock' : `${fixed.count} locks`} totalling <b>${formatNim(fixed.luna)} NIM</b> reached the Nimiq network
+        but ${fixed.count === 1 ? 'was' : 'were'} refused, so nothing was staked. Holdfast had counted ${fixed.count === 1 ? 'it' : 'them'} anyway.</p>
+      <p><b>Your NIM is safe:</b> a refused transaction leaves the amount in your wallet; only the small network fee is spent.</p>
+      <p class="muted small">The cause is fixed: Holdfast now checks your wallet before each lock and confirms every lock on the network.
+        You can lock again from any goal.</p>
+      <button class="btn btn-primary" id="ok-fixed">OK</button>`,
+    (sheet, close) => $('#ok-fixed', sheet)!.addEventListener('click', close),
+  )
+}
+
+/** Follow one lock until the network confirms it or refuses it (about two minutes at most). */
+async function watchLock(tx: string, luna: number): Promise<void> {
+  for (let i = 0; i < 24; i++) {
+    await new Promise((r) => setTimeout(r, 5000))
+    const outcome = await getTransactionOutcome(tx)
+    if (!outcome || !outcome.found) continue
+    if (outcome.executed === false) {
+      const goal = ctx.state.goals.find((g) => g.events.some((e) => e.type === 'lock' && e.tx === tx))
+      if (goal) commit(replaceGoal(ctx.state, rejectLock(goal, tx)))
+      clearExpectedStake()
+      void refreshChain()
+      toast(`The network refused this lock, so nothing was staked. Your ${formatNim(luna)} NIM is still in your wallet.`, 'error')
+      return
+    }
+    // Included and not refused: confirm once the stake shows it (or the server says it executed).
+    const fresh = await readLiveStake()
+    if (outcome.executed === true || (fresh && fresh.exists)) {
+      const goal = ctx.state.goals.find((g) => g.events.some((e) => e.type === 'lock' && e.tx === tx))
+      if (goal) commit({ ...replaceGoal(ctx.state, confirmLock(goal, tx)), stakerCreated: true })
+      toast(`Locked ${formatNim(luna)} NIM. Hold fast! 🔒`, 'success')
+      burst(document.querySelector('.goal-hero .ring-wrap'))
+      return
+    }
+  }
+  // Still unknown: the check that runs when Holdfast opens will settle it.
 }
 
 /** Re-read stake and balance a little after a transaction, skipping cached readings. */
@@ -582,7 +826,9 @@ function keeperPayload(goal: Goal): KeeperPayload {
     e: goal.emoji,
     t: goal.targetLuna,
     a: formatAddress(ctx.address ?? ''),
-    b: goal.baselineLuna,
+    // With several goals the wallet's starting stake alone doesn't give one goal's share, so a link
+    // without a backed-up goal shows its snapshot rather than guessing from the chain.
+    b: 0,
     c: goal.createdAt,
     s: currentSaved(goal),
     st: Date.now(),
@@ -596,7 +842,8 @@ function keeperPayload(goal: Goal): KeeperPayload {
 
 function shareKeeper(goal: Goal): void {
   const url = keeperUrl(location.href, keeperPayload(goal))
-  const text = `I'm saving for "${goal.name}" with Holdfast. Be my Goalkeeper: watch my progress, cheer me on, and call me out if I break the seal.`
+  // Short, and the link on its own line, so chat apps show it as a preview card.
+  const text = `🛡️ Be my Goalkeeper! I'm saving for "${goal.name}" with Holdfast. Watch my progress and cheer me on:`
   openSheet(
     html`<h2>Be my Goalkeeper</h2>
       <p class="muted">Send this link to <b>one</b> friend you trust. It shows your goal, progress and public wallet address.
@@ -606,7 +853,7 @@ function shareKeeper(goal: Goal): void {
         <button class="btn btn-primary" id="do-share">Share…</button>
         <button class="btn btn-secondary" id="do-copy">Copy link</button>
       </div>
-      <a class="btn btn-link" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`${text} ${url}`)}">Send via WhatsApp</a>`,
+      <a class="btn btn-link" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`${text}\n${url}`)}">Send via WhatsApp</a>`,
     (sheet) => {
       const mark = () => {
         const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
@@ -639,7 +886,9 @@ function shareKeeper(goal: Goal): void {
  * starting stake is unknown, what Holdfast locked for it), never more than is actually active.
  */
 function goalShare(goal: Goal, liveActive: number): number {
-  const own = baselineUnknown(goal) ? goal.lockedLuna - (goal.pendingUnlock?.luna ?? 0) : savedLuna(goal, liveActive)
+  // This goal's part of the live stake (or its own ledger while the wallet baseline is unknown),
+  // never more than is actually active. Other goals' shares are not touched.
+  const own = goalSavings(ctx.state, liveActive).get(goal.id) ?? 0
   return Math.max(0, Math.min(liveActive, own))
 }
 
@@ -670,7 +919,7 @@ async function breakSeal(goal: Goal): Promise<void> {
       <p>You're <b>${Math.floor(pct(currentSaved(goal), goal.targetLuna))}%</b> of the way to <b>${goal.emoji} ${goal.name}</b>.
       Withdrawing stops rewards on that NIM and your Goalkeeper will see it.</p>
       <p class="muted small">Unstaking on Nimiq takes three steps: deactivate now, then after the network's cool-down
-        retire it, then return it to your wallet. Holdfast walks you through each one.</p>
+        (12 to 24 hours) retire it, then return it to your wallet. Holdfast walks you through each one.</p>
       <form id="unlock-form" class="form" novalidate>
         <label>Amount to withdraw
           <div class="amount-input"><input name="amount" inputmode="decimal" value="${toNim(max)}"/><span class="unit">NIM</span></div>
@@ -696,7 +945,7 @@ async function breakSeal(goal: Goal): Promise<void> {
         e.preventDefault()
         const luna = parseNimInput((form.elements.namedItem('amount') as HTMLInputElement).value)
         if (!luna) return toast('Enter an amount', 'error')
-        if (luna > max) return toast(`You can withdraw at most ${formatNim(max)} NIM from this goal`, 'error')
+        if (luna > max) return toast(`You can withdraw at most ${formatNim(max, { full: true })} NIM from this goal`, 'error')
         void busy(submit, 'Confirm in Nimiq Pay…', async () => {
           if (await startUnlock(goal, luna)) close()
         })
@@ -717,26 +966,59 @@ async function startUnlock(goal: Goal, luna: number): Promise<boolean> {
   }
   const latestGoal = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
   if (luna > goalShare(latestGoal, live.balance)) {
-    toast(`Your stake changed. You can withdraw at most ${formatNim(goalShare(latestGoal, live.balance))} NIM from this goal now.`, 'error')
+    toast(`Your stake changed. You can withdraw at most ${formatNim(goalShare(latestGoal, live.balance), { full: true })} NIM from this goal now.`, 'error')
     return false
   }
   const newActiveBalance = live.balance - luna
   try {
     const tx = await w.sendSetActiveStakeTransaction({ newActiveBalance })
-    const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
-    commit(replaceGoal(ctx.state, recordUnlockStart(latest, luna, tx)))
+    commit(startGoalWithdrawal(ctx.state, goal.id, luna, tx, live.balance))
+    expectStakeChange(-luna)
     toast('Seal broken. Your NIM is cooling down.', 'info')
     afterTransaction()
     return true
   } catch (err) {
-    toast(isUserRejection(err) ? 'Cancelled. Still sealed 🔒' : `Could not unlock: ${errorMessage(err)}`, isUserRejection(err) ? 'info' : 'error')
+    toast(isUserRejection(err) ? 'Cancelled. Still sealed 🔒' : (walletBusy(err) ?? `Could not unlock: ${errorMessage(err)}`), isUserRejection(err) ? 'info' : 'error')
     return false
   }
+}
+
+/** Withdrawal steps sent but not yet confirmed, by goal id (only for this visit). */
+const stepInFlight = new Map<string, { kind: 'retire' | 'remove'; tx: string }>()
+
+/** "13 h 20 min", "45 min", "under a minute". */
+function roughDuration(seconds: number): string {
+  if (seconds < 60) return 'under a minute'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.ceil((seconds % 3600) / 60)
+  if (!h) return `${m} min`
+  return m === 60 ? `${h + 1} h` : m ? `${h} h ${m} min` : `${h} h`
+}
+
+/** Seconds until the deactivated stake can be retired: 0 = now, null = can't tell from here. */
+function coolDownLeft(): number | null {
+  const ready = retireReadyBlock(ctx.stake?.inactiveFrom ?? null)
+  const block = estimatedBlock()
+  if (ready === null || block === null || !ctx.stake || ctx.stake.inactiveBalance <= 0) return null
+  return Math.max(0, ready - block)
 }
 
 function unlockCard(goal: Goal): Raw {
   const p = goal.pendingUnlock!
   const step = p.step === 'inactive' ? 2 : 3
+  const sending = stepInFlight.get(goal.id)
+  const left = step === 2 ? coolDownLeft() : 0
+  const waiting = step === 2 && left !== null && left > 0
+  const note = sending
+    ? 'Sent. Waiting for the network to confirm it…'
+    : step === 3
+      ? 'Last step: move the NIM back to your spendable balance.'
+      : waiting
+        ? `Cool-down: ready in about ${roughDuration(left!)}. The Nimiq network keeps deactivated stake locked for one epoch (about 12 hours) after the deactivation takes effect, so a withdrawal takes 12 to 24 hours in total. Your NIM is safe meanwhile.`
+        : left === 0
+          ? 'The cool-down is over. Retire the stake, then return it to your wallet.'
+          : 'The Nimiq network keeps deactivated stake locked for 12 to 24 hours. If Nimiq Pay or the network refuses the retire step, the cool-down is still running: try again later.'
+  const label = sending ? 'Waiting for the network…' : waiting ? 'Cooling down…' : step === 2 ? 'Retire stake' : 'Return NIM to wallet'
   return html`<section class="card unlock-card">
     <h3>Withdrawal in progress</h3>
     <ol class="steps">
@@ -744,54 +1026,101 @@ function unlockCard(goal: Goal): Raw {
       <li class="${step === 2 ? 'current' : 'done'}">Retire after the cool-down</li>
       <li class="${step === 3 ? 'current' : ''}">Return to wallet</li>
     </ol>
-    <p class="muted small">Started ${timeAgo(p.startedAt)}. ${
-      step === 2
-        ? 'Stake can only be retired once the network cool-down (end of the current epoch plus a reporting window) has passed. If Nimiq Pay rejects it, try again later.'
-        : 'Last step: move the NIM back to your spendable balance.'
-    }</p>
-    <button class="btn btn-secondary" id="unlock-next">${step === 2 ? 'Retire stake' : 'Return NIM to wallet'}</button>
+    <p class="muted small">Started ${timeAgo(p.startedAt)}. ${note}</p>
+    <button class="btn btn-secondary" id="unlock-next" ${sending || waiting ? 'disabled' : ''}>${label}</button>
   </section>`
+}
+
+/** Watch a retire or return transaction: record it once the network confirms, explain a refusal. */
+async function watchStep(goalId: string, kind: 'retire' | 'remove', tx: string): Promise<void> {
+  try {
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 5000))
+      const outcome = await getTransactionOutcome(tx)
+      if (!outcome || !outcome.found) continue
+      if (outcome.executed === false) {
+        toast(
+          kind === 'retire'
+            ? "The network refused the retire step: the cool-down hasn't ended yet. Nothing changed and your NIM is safe."
+            : 'The network refused this step. Nothing changed and your NIM is safe. Try again in a moment.',
+          'error',
+        )
+        return
+      }
+      if (outcome.executed === true) {
+        const goal = ctx.state.goals.find((g) => g.id === goalId)
+        if (goal?.pendingUnlock) commit(replaceGoal(ctx.state, kind === 'retire' ? recordRetire(goal, tx) : recordRelease(goal, tx)))
+        toast(kind === 'retire' ? 'Retired. One more step.' : 'NIM returned to your wallet.', 'success')
+        return
+      }
+      break // included, but the server doesn't say how it went: the stake reading decides
+    }
+  } finally {
+    stepInFlight.delete(goalId)
+    afterTransaction()
+  }
+}
+
+/**
+ * Nimiq Pay sends one transaction at a time per wallet. When this wallet's previous one is still
+ * unresolved, say so plainly: it only affects this wallet, and nothing was sent.
+ */
+function walletBusy(err: unknown): string | null {
+  return /still pending|pending transaction/i.test(errorMessage(err))
+    ? 'Your wallet is still waiting on its previous transaction, so nothing was sent and your NIM is untouched. Nimiq Pay sends one transaction at a time per wallet; try again once that one has gone through or expired (at most about 2 hours).'
+    : null
+}
+
+function stepError(err: unknown): string {
+  return walletBusy(err) ?? `Not yet: ${errorMessage(err).replace(/\.+\s*$/, '')}.`
 }
 
 function bindUnlockCard(root: HTMLElement, goal: Goal): void {
   const btn = $<HTMLButtonElement>('#unlock-next', root)
   const p = goal.pendingUnlock
-  if (!btn || !p || !ctx.wallet) return
+  if (!btn || !p || !ctx.wallet || btn.disabled) return
   const w = ctx.wallet
   btn.addEventListener('click', () =>
     void busy(btn, 'Confirm in Nimiq Pay…', async () => {
+      const kind = p.step === 'inactive' ? 'retire' : 'remove'
       try {
-        const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
-        if (p.step === 'inactive') {
-          const tx = await w.sendRetireStakeTransaction({ retireStake: p.luna })
-          commit(replaceGoal(ctx.state, recordRetire(latest, tx)))
-          toast('Retired. One more step.', 'info')
-        } else {
-          const tx = await w.sendRemoveStakeTransaction({ value: p.luna })
-          commit(replaceGoal(ctx.state, recordRelease(latest, tx)))
-          toast('NIM returned to your wallet.', 'info')
-        }
-        afterTransaction()
+        const tx =
+          kind === 'retire'
+            ? await w.sendRetireStakeTransaction({ retireStake: p.luna })
+            : await w.sendRemoveStakeTransaction({ value: p.luna })
+        stepInFlight.set(goal.id, { kind, tx })
+        toast('Sent. Waiting for the network to confirm…', 'info')
+        emit(true)
+        void watchStep(goal.id, kind, tx)
       } catch (err) {
-        toast(
-          isUserRejection(err) ? 'Cancelled' : `Not yet: ${errorMessage(err)}. The cool-down may still be running.`,
-          isUserRejection(err) ? 'info' : 'error',
-        )
+        toast(isUserRejection(err) ? 'Cancelled' : stepError(err), isUserRejection(err) ? 'info' : 'error')
       }
     }),
   )
 }
 
 function closeGoal(goal: Goal): void {
+  if (goal.pendingUnlock) {
+    toast('Finish the withdrawal on this goal first, then you can close it.', 'info')
+    return
+  }
+  const saved = currentSaved(goal)
+  const others = activeGoals(ctx.state).length > 1
   openSheet(
     html`<h2>${goal.reachedAt ? 'Finish this goal?' : 'Close this goal?'}</h2>
-      <p class="muted">Your NIM stays staked and keeps earning. Closing only archives the goal in Holdfast so you can start a new one.</p>
+      <p class="muted">The ${formatNim(saved)} NIM in <b>${goal.emoji} ${goal.name}</b> stays staked in your wallet and keeps earning.
+        Closing only moves the goal to Past goals.</p>
+      <p class="muted small">${
+        others
+          ? 'That NIM is set aside from your other goals, so their numbers stay the same.'
+          : 'That NIM no longer counts toward a goal, so a new goal starts from zero.'
+      }</p>
       <button class="btn btn-primary" id="confirm-close">${goal.reachedAt ? 'Finish goal' : 'Close goal'}</button>`,
     (sheet, close) => {
       $('#confirm-close', sheet)!.addEventListener('click', () => {
-        const latest = ctx.state.goals.find((g) => g.id === goal.id) ?? goal
-        commit(replaceGoal(ctx.state, { ...latest, status: latest.reachedAt ? 'completed' : 'archived' }))
+        commit(closeGoalInState(ctx.state, goal.id, ctx.stake ? ctx.stake.balance : null))
         close()
+        location.hash = '#/'
       })
     },
   )

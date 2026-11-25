@@ -9,8 +9,10 @@ import { normalizeAddress } from './crypto.js'
  * staked in the saver's own wallet.
  */
 
-const EVENT_TYPES = new Set(['created', 'lock', 'unlock', 'retire', 'release', 'reached', 'shared'])
-const MAX_GOALS = 12
+const EVENT_TYPES = new Set(['created', 'lock', 'unlock', 'retire', 'release', 'reached', 'shared', 'rejected'])
+/** Goals kept per wallet (active plus the newest closed ones), and how many may be active at once. */
+const MAX_GOALS = 24
+const MAX_ACTIVE = 5
 const MAX_EVENTS = 40
 const MAX_ACCOUNTS = 4
 /** More than every NIM that will ever exist, in luna. Anything larger is malformed. */
@@ -32,6 +34,8 @@ export interface SyncedGoal {
   targetLuna: number
   baselineLuna: number
   lockedLuna: number
+  /** Rewards the goal had already earned at its last change (see the app's store). */
+  rewardLuna?: number
   /** Saved toward the goal when the phone last synced (on-chain stake when it could read it). */
   savedLuna: number
   createdAt: number
@@ -47,14 +51,29 @@ export interface SyncedGoal {
 export interface SyncedState {
   goals: SyncedGoal[]
   stakerCreated: boolean
+  /** Active stake that belongs to no goal (see the app's store). Absent on older backups. */
+  walletBaselineLuna?: number
+  walletBaselineFromChain?: boolean
   /** The saver's Nimiq Pay addresses; stake on all of them counts. The first is the signed-in one. */
   accounts: string[]
   network: Net
   updatedAt: number
 }
 
-const stateKey = (address: string) => `st:${address.replace(/\s/g, '')}`
+export const stateKey = (address: string) => `st:${address.replace(/\s/g, '')}`
 const LOCKED_KEY = 'locked'
+/** address → number of active goals, for the public numbers. */
+const GOALS_KEY = 'goals'
+/** address → the part of its locked amount the blockchain confirms, and when that was checked. */
+const CHAIN_KEY = 'lockedChain'
+const CHAIN_AT_KEY = 'lockedChainAt'
+/** How long a confirmed amount is trusted before it is read from the blockchain again. */
+const CHAIN_TTL_MS = 2 * 60_000
+/** Savers re-checked per stats request, so one request never waits on many reads. */
+const CHAIN_BATCH = 10
+
+/** Reads what a saver has staked on the blockchain (all their addresses); null if it can't. */
+export type StakeReader = (accounts: string[], net: Net) => Promise<number | null>
 
 const bad = (what: string): never => {
   throw new ApiError(400, 'bad_goal', `Goal data is malformed (${what}).`)
@@ -110,6 +129,7 @@ export function cleanGoal(raw: unknown): SyncedGoal {
     targetLuna: luna(g.targetLuna, 'targetLuna'),
     baselineLuna: luna(g.baselineLuna, 'baselineLuna'),
     lockedLuna: luna(g.lockedLuna, 'lockedLuna'),
+    ...(g.rewardLuna !== undefined ? { rewardLuna: luna(g.rewardLuna, 'rewardLuna') } : {}),
     savedLuna: g.savedLuna === undefined ? luna(g.lockedLuna, 'lockedLuna') : luna(g.savedLuna, 'savedLuna'),
     createdAt: time(g.createdAt, 'createdAt'),
     status: g.status as SyncedGoal['status'],
@@ -128,16 +148,21 @@ export function cleanState(raw: unknown, owner: string, now: number): SyncedStat
   if (!s || typeof s !== 'object' || !Array.isArray(s.goals)) bad('state')
   if ((s.goals as unknown[]).length > MAX_GOALS) bad(`more than ${MAX_GOALS} goals`)
   const goals = (s.goals as unknown[]).map(cleanGoal)
-  if (goals.filter((g) => g.status === 'active').length > 1) bad('more than one active goal')
+  if (goals.filter((g) => g.status === 'active').length > MAX_ACTIVE) bad(`more than ${MAX_ACTIVE} active goals`)
   if (new Set(goals.map((g) => g.id)).size !== goals.length) bad('duplicate goal id')
   const others = (Array.isArray(s.accounts) ? s.accounts : [])
     .map((a) => normalizeAddress(a))
     .filter((a): a is string => !!a && a !== owner)
   const accounts = [owner, ...new Set(others)].slice(0, MAX_ACCOUNTS)
-  return { goals, stakerCreated: s.stakerCreated === true, accounts, network: cleanNet(s.network), updatedAt: now }
+  let wallet: Pick<SyncedState, 'walletBaselineLuna' | 'walletBaselineFromChain'> = {}
+  if (s.walletBaselineLuna !== undefined || s.walletBaselineFromChain !== undefined) {
+    if (typeof s.walletBaselineFromChain !== 'boolean') bad('walletBaselineFromChain')
+    wallet = { walletBaselineLuna: luna(s.walletBaselineLuna, 'walletBaselineLuna'), walletBaselineFromChain: s.walletBaselineFromChain as boolean }
+  }
+  return { goals, stakerCreated: s.stakerCreated === true, ...wallet, accounts, network: cleanNet(s.network), updatedAt: now }
 }
 
-function readState(raw: unknown): SyncedState | null {
+export function readState(raw: unknown): SyncedState | null {
   if (typeof raw !== 'string') return null
   try {
     const s = JSON.parse(raw) as SyncedState
@@ -147,15 +172,27 @@ function readState(raw: unknown): SyncedState | null {
   }
 }
 
+/**
+ * Whether a goal counts in the public "active goals" and "NIM locked" numbers: an open goal,
+ * unless its seal was broken and every NIM in it has come back to the wallet. Locking into it
+ * again makes it count again.
+ */
+export const countsAsActive = (g: SyncedGoal): boolean =>
+  g.status === 'active' && !(g.sealBrokenAt !== null && !g.pendingUnlock && g.lockedLuna === 0 && !g.rewardLuna)
+
 /** Save the signed-in saver's goals. */
 export async function syncState(ctx: RequestContext, address: string, body: { state?: unknown }): Promise<{ updatedAt: number }> {
   await rateLimit(ctx, `sync:${address.replace(/\s/g, '')}`, 240, 3600)
   const state = cleanState(body.state, address, ctx.now)
-  const active = state.goals.find((g) => g.status === 'active')
+  const active = state.goals.filter(countsAsActive)
   const member = address.replace(/\s/g, '')
+  const locked = active.reduce((a, g) => a + g.lockedLuna, 0)
   await ctx.store.pipeline([
     ['SET', stateKey(address), JSON.stringify(state)],
-    active ? ['HSET', LOCKED_KEY, member, active.lockedLuna] : ['HDEL', LOCKED_KEY, member],
+    active.length ? ['HSET', LOCKED_KEY, member, locked] : ['HDEL', LOCKED_KEY, member],
+    active.length ? ['HSET', GOALS_KEY, member, active.length] : ['HDEL', GOALS_KEY, member],
+    // Check this saver against the blockchain again on the next stats request.
+    ['HDEL', CHAIN_AT_KEY, member],
   ])
   return { updatedAt: state.updatedAt }
 }
@@ -165,8 +202,17 @@ export async function getState(ctx: RequestContext, address: string): Promise<{ 
   return { state: readState(await ctx.store.cmd('GET', stateKey(address))) }
 }
 
+/** The saver's other active goals, by amount only (no names or ids), to work out this goal's share. */
+export interface PublicWallet {
+  baselineLuna: number | null
+  baselineFromChain: boolean | null
+  /** Every active goal's ledger; `self` marks the goal this link is for. */
+  goals: { self: boolean; lockedLuna: number; pendingLuna: number; rewardLuna: number }[]
+}
+
 export interface PublicGoal {
   goal: SyncedGoal
+  wallet: PublicWallet
   owner: { name: string }
   accounts: string[]
   network: Net
@@ -188,6 +234,13 @@ export async function publicGoal(ctx: RequestContext, rawAddress: unknown, rawId
   if (!state || !goal) throw new ApiError(404, 'no_goal', 'This goal has not been backed up yet.')
   return {
     goal,
+    wallet: {
+      baselineLuna: state.walletBaselineLuna ?? null,
+      baselineFromChain: state.walletBaselineFromChain ?? null,
+      goals: state.goals
+        .filter((x) => x.status === 'active')
+        .map((x) => ({ self: x.id === id, lockedLuna: x.lockedLuna, pendingLuna: x.pendingUnlock?.luna ?? 0, rewardLuna: x.rewardLuna ?? 0 })),
+    },
     owner: { name: typeof name === 'string' && name ? name : defaultName(address) },
     accounts: state.accounts,
     network: state.network,
@@ -195,16 +248,72 @@ export async function publicGoal(ctx: RequestContext, rawAddress: unknown, rawId
   }
 }
 
-/** Public numbers that show Holdfast is in real use. */
-export async function publicStats(ctx: RequestContext): Promise<{ savers: number; activeGoals: number; lockedLuna: number }> {
-  const [users, locked] = await ctx.store.pipeline([
+/**
+ * Public numbers that show Holdfast is in real use. "NIM locked" counts only what the blockchain
+ * confirms: each saver's goals count up to what their addresses really have staked, so a lock the
+ * network refused (or a phone reporting a wrong amount) adds nothing. Without `readStake` (tests,
+ * or no chain access configured) the goals' own records are used.
+ */
+export async function publicStats(
+  ctx: RequestContext,
+  readStake?: StakeReader,
+): Promise<{ savers: number; activeGoals: number; lockedLuna: number }> {
+  const [users, locked, goals, chain, chainAt] = await ctx.store.pipeline([
     ['GET', 'stats:users'],
-    ['HVALS', LOCKED_KEY],
+    ['HGETALL', LOCKED_KEY],
+    ['HGETALL', GOALS_KEY],
+    ['HGETALL', CHAIN_KEY],
+    ['HGETALL', CHAIN_AT_KEY],
   ])
-  const values = Array.isArray(locked) ? locked.map(Number).filter((n) => Number.isFinite(n) && n >= 0) : []
-  return {
-    savers: Number(users) || 0,
-    activeGoals: values.length,
-    lockedLuna: values.reduce((a, n) => a + n, 0),
+  const asMap = (flat: unknown): Map<string, number> => {
+    const m = new Map<string, number>()
+    const list = Array.isArray(flat) ? flat.map(String) : []
+    for (let i = 0; i + 1 < list.length; i += 2) {
+      const n = Number(list[i + 1])
+      if (Number.isFinite(n) && n >= 0) m.set(list[i]!, n)
+    }
+    return m
   }
+  const lockedBy = asMap(locked)
+  const goalsBy = asMap(goals)
+  // Backups from before several goals were possible have a locked amount but no goal count: one goal.
+  let activeGoals = 0
+  for (const member of lockedBy.keys()) activeGoals += goalsBy.get(member) ?? 1
+  const stats = (lockedLuna: number) => ({ savers: Number(users) || 0, activeGoals, lockedLuna })
+  if (!readStake) return stats([...lockedBy.values()].reduce((a, n) => a + n, 0))
+
+  const confirmed = asMap(chain)
+  const checkedAt = asMap(chainAt)
+  const due = [...lockedBy.keys()]
+    .filter((m) => ctx.now - (checkedAt.get(m) ?? 0) > CHAIN_TTL_MS)
+    .sort((a, b) => (checkedAt.get(a) ?? 0) - (checkedAt.get(b) ?? 0))
+    .slice(0, CHAIN_BATCH)
+  if (due.length) {
+    const states = await ctx.store.pipeline(due.map((m) => ['GET', stateKey(m)]))
+    const results = await Promise.all(
+      due.map(async (member, i) => {
+        const state = readState(states[i])
+        const staked = state ? await readStake(state.accounts, state.network) : 0
+        // Couldn't read the blockchain: keep the last confirmed amount and try again next time.
+        if (staked === null) return null
+        return { member, luna: Math.min(lockedBy.get(member) ?? 0, staked) }
+      }),
+    )
+    const writes: (string | number)[][] = []
+    for (const r of results) {
+      if (!r) continue
+      confirmed.set(r.member, r.luna)
+      writes.push(['HSET', CHAIN_KEY, r.member, r.luna], ['HSET', CHAIN_AT_KEY, r.member, ctx.now])
+    }
+    if (writes.length) {
+      try {
+        await ctx.store.pipeline(writes)
+      } catch {
+        /* not saved: checked again on the next request */
+      }
+    }
+  }
+  let lockedLuna = 0
+  for (const member of lockedBy.keys()) lockedLuna += Math.min(lockedBy.get(member)!, confirmed.get(member) ?? 0)
+  return stats(lockedLuna)
 }

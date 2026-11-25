@@ -15,7 +15,9 @@ describe('parseNimInput', () => {
 
 describe('formatting', () => {
   it('formats NIM and fiat', () => {
-    expect(formatNim(toLuna(1234.567))).toBe('1,235')
+    expect(formatNim(toLuna(1234.567))).toBe('1,234.57')
+    expect(formatNim(toLuna(50_050))).toBe('50,050')
+    expect(formatNim(123_456_789, { full: true })).toBe('1,234.56789')
     expect(formatNim(toLuna(12.345))).toBe('12.35')
     expect(formatFiat(1234.5, 'usd')).toBe('$1,234.50')
     expect(formatFiat(1234.5, 'usdt')).toBe('1,234.50 USDT')
@@ -38,5 +40,14 @@ describe('addresses', () => {
   })
   it('groups addresses', () => {
     expect(formatAddress('nq0700000000000000000000000000000000')).toBe('NQ07 0000 0000 0000 0000 0000 0000 0000 0000')
+  })
+})
+
+describe('compact numbers for the usage tiles', () => {
+  it('shortens big numbers so they fit a small tile', async () => {
+    const { compactNumber } = await import('../src/views/saver')
+    expect([0, 29, 999, 1000, 12_400, 100_000, 999_999, 2_500_000, 1_000_000_000].map(compactNumber)).toEqual(
+      ['0', '29', '999', '1K', '12.4K', '100K', '999K', '2.5M', '1B'],
+    )
   })
 })

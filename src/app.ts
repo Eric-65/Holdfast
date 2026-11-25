@@ -1,6 +1,6 @@
-import { getStakeTotals, fetchCheers, fetchValidators, chainAvailable, readFreshFor, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
+import { getActiveValidatorAddresses, getBlockNumber, getStakeTotals, getTransactionOutcome, fetchCheers, fetchValidators, chainAvailable, readFreshFor, setChainNetwork, type Cheer, type StakerInfo, type Validator } from './lib/chain'
 import { getPrices, type PriceState } from './lib/prices'
-import { activeGoal, baselineUnknown, loadState, replaceGoal, saveState, withChainBaseline, type StoreState } from './lib/store'
+import { confirmLock, loadState, reconcileWithdrawal, rejectLock, replaceGoal, saveState, SETTLE_MS, withWalletBaseline, type StoreState } from './lib/store'
 import { hostFiat, hostNetwork, type Wallet } from './lib/wallet'
 import { toNim } from './lib/format'
 import type { OwnProfile, PublicStats } from './lib/api'
@@ -39,6 +39,10 @@ export interface AppCtx {
   stats: PublicStats | null
   /** When the goals were last backed up to the profile (ms), 0 = not yet on this visit. */
   syncedAt: number
+  /** True once a cheers request has finished (cheers stay null if it failed). */
+  cheersChecked: boolean
+  /** The latest block number and when it was read, to count down a withdrawal's cool-down. */
+  chainBlock: { n: number; at: number } | null
 }
 
 export const ctx: AppCtx = {
@@ -59,6 +63,8 @@ export const ctx: AppCtx = {
   cheers: null,
   stats: null,
   syncedAt: 0,
+  chainBlock: null,
+  cheersChecked: false,
   fiats: (() => {
     const base = ['usdt', 'ngn']
     const h = hostFiat()
@@ -111,20 +117,74 @@ export async function attachWallet(wallet: Wallet): Promise<void> {
  * to send a transaction must use the return value, never ctx.stake, so they never act on an old
  * number.
  */
+/**
+ * Right after a lock or withdrawal the network may still answer with the stake from before it
+ * (the block isn't in yet, or a cached answer). Until a reading shows the change, the screen keeps
+ * the expected number and such a reading doesn't count as fresh, so a withdrawal never acts on it.
+ */
+let expected: { balance: number; dir: 1 | -1; until: number } | null = null
+const EXPECT_MS = 3 * 60_000
+const LUNA_PER_NIM = 100_000
+
+/** Call after Nimiq Pay sent a transaction that changes the active stake by `delta` luna. */
+export function expectStakeChange(delta: number): void {
+  if (!ctx.stake || !delta) return
+  const balance = Math.max(0, ctx.stake.balance + delta)
+  expected = { balance, dir: delta > 0 ? 1 : -1, until: Date.now() + EXPECT_MS }
+  ctx.stake = { ...ctx.stake, balance }
+  emit()
+}
+
+/** Stop waiting for a change (the transaction was refused). */
+export function clearExpectedStake(): void {
+  expected = null
+}
+
+/** Whether a reading already includes the change we're waiting for (rewards only ever add a little). */
+export function readingShowsChange(reading: number, exp: { balance: number; dir: 1 | -1 }): boolean {
+  return exp.dir > 0 ? reading >= exp.balance - 1 : reading <= exp.balance + LUNA_PER_NIM
+}
+
 export async function refreshChain(): Promise<StakerInfo | null> {
   if (!ctx.wallet || !ctx.accounts.length || !chainAvailable()) return null
-  const stake = await getStakeTotals(ctx.accounts)
+  let stake = await getStakeTotals(ctx.accounts)
+  if (stake && expected) {
+    if (Date.now() > expected.until || readingShowsChange(stake.balance, expected)) expected = null
+    else stake = null // an older answer: keep showing the expected number, and don't call it fresh
+  }
   if (stake) ctx.stake = stake
-  const goal = activeGoal(ctx.state)
-  if (ctx.stake && goal && baselineUnknown(goal)) {
-    const fixed = withChainBaseline(goal, ctx.stake.balance)
-    if (fixed !== goal) {
-      commit(replaceGoal(ctx.state, fixed), { quiet: true })
+  // The first settled reading tells how much of the stake belongs to no goal.
+  if (stake) {
+    let fixed = withWalletBaseline(ctx.state, stake.balance)
+    // Withdrawals follow the blockchain: undo a retire that didn't happen, record steps that did.
+    for (const g of fixed.goals) {
+      if (g.status !== 'active' || !g.pendingUnlock) continue
+      const matched = reconcileWithdrawal(g, stake)
+      if (matched !== g) fixed = replaceGoal(fixed, matched)
+    }
+    // A withdrawal waiting for its cool-down needs the block number for the countdown.
+    if (fixed.goals.some((g) => g.status === 'active' && g.pendingUnlock?.step === 'inactive')) await refreshBlock()
+    if (fixed !== ctx.state) {
+      commit(fixed, { quiet: true })
       return stake
     }
   }
   emit()
   return stake
+}
+
+const BLOCK_FRESH_MS = 60_000
+/** The current block number, read at most once a minute. */
+async function refreshBlock(): Promise<void> {
+  if (ctx.chainBlock && Date.now() - ctx.chainBlock.at < BLOCK_FRESH_MS) return
+  const n = await getBlockNumber()
+  if (n !== null) ctx.chainBlock = { n, at: Date.now() }
+}
+
+/** Best guess of the block number now: the last reading plus one block a second since. */
+export function estimatedBlock(now = Date.now()): number | null {
+  const b = ctx.chainBlock
+  return b ? b.n + Math.floor((now - b.at) / 1000) : null
 }
 
 /** A reading straight from the network, skipping any cached answer. For use right before a transaction. */
@@ -142,6 +202,10 @@ export async function refreshCheers(force = false): Promise<void> {
   cheersFetchedAt = Date.now()
   const cheers = await fetchCheers(address)
   if (address !== ctx.address) return
+  if (!ctx.cheersChecked) {
+    ctx.cheersChecked = true
+    if (cheers === null) emit()
+  }
   if (cheers === null && ctx.cheers !== null) return // keep what we have on a temporary failure
   ctx.cheers = cheers
   emit()
@@ -182,6 +246,58 @@ export async function refreshBalance(changed = false): Promise<void> {
   }
 }
 
+/**
+ * Check recorded locks against the chain. A lock the network refused (included but failed) is
+ * taken off its goal, since nothing was staked. If no address of this wallet is a staker at all,
+ * no settled lock can have gone through, whatever the server says about single transactions.
+ * Returns the locks undone in this run.
+ */
+let verifying = false
+export async function verifyLocks(): Promise<{ count: number; luna: number }> {
+  const none = { count: 0, luna: 0 }
+  if (verifying || !ctx.wallet || !chainAvailable()) return none
+  verifying = true
+  try {
+    const now = Date.now()
+    const pending = ctx.state.goals
+      .filter((g) => g.status === 'active')
+      .flatMap((g) => g.events.filter((e) => e.type === 'lock' && e.tx && !e.ok).map((e) => ({ goal: g.id, tx: e.tx!, at: e.at })))
+      .slice(-10)
+    if (!pending.length) return none
+    const stake = await getStakeTotals(ctx.accounts)
+    let state = ctx.state
+    let count = 0
+    let luna = 0
+    for (const p of pending) {
+      const outcome = await getTransactionOutcome(p.tx)
+      if (!outcome) continue // network unreachable: try again later
+      const goal = state.goals.find((g) => g.id === p.goal)
+      if (!goal) continue
+      const settled = now - p.at > SETTLE_MS
+      // A goal that has since been withdrawn can leave the wallet with no staker; that proves nothing.
+      const withdrawnSince = goal.events.some((e) => (e.type === 'unlock' || e.type === 'release') && e.at >= p.at) || !!goal.pendingUnlock
+      const refused = outcome.executed === false || (settled && outcome.found && stake !== null && !stake.exists && !withdrawnSince)
+      if (refused) {
+        const event = goal.events.find((e) => e.type === 'lock' && e.tx === p.tx)
+        count++
+        luna += event?.luna ?? 0
+        state = replaceGoal(state, rejectLock(goal, p.tx, now))
+      } else if (outcome.found && (outcome.executed === true || stake?.exists)) {
+        state = replaceGoal(state, confirmLock(goal, p.tx))
+        state = { ...state, stakerCreated: true }
+      }
+    }
+    if (state !== ctx.state) {
+      // Undone locks change what belongs to which goal: read the wallet baseline again.
+      if (count) state = { ...state, walletBaselineFromChain: false, walletBaselineLuna: 0 }
+      commit(state, { quiet: true })
+    }
+    return { count, luna }
+  } finally {
+    verifying = false
+  }
+}
+
 export async function refreshPrices(): Promise<void> {
   ctx.prices = await getPrices()
   emit()
@@ -190,7 +306,19 @@ export async function refreshPrices(): Promise<void> {
 /** `retry` asks again when an earlier attempt came back empty (for example while offline). */
 export async function loadValidators(retry = false): Promise<void> {
   if (ctx.validatorsLoaded && !(retry && !ctx.validators.length)) return
-  ctx.validators = await fetchValidators()
+  // The validators API lists mainnet validators only. On testnet, ask the testnet itself, so a new
+  // staker is never delegated to a validator that doesn't exist there.
+  ctx.validators =
+    hostNetwork() === 'testnet'
+      ? (await getActiveValidatorAddresses('testnet')).map((address) => ({
+          address,
+          name: `Testnet validator ${address.replace(/\s/g, '').slice(-4)}`,
+          fee: null,
+          payoutType: null,
+          score: null,
+          logo: null,
+        }))
+      : await fetchValidators()
   ctx.validatorsLoaded = true
   emit()
 }

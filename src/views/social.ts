@@ -5,7 +5,7 @@ import { inviteUrl, nimiqPayDeepLink, miniAppTarget } from '../lib/deeplink'
 import { timeAgo } from '../lib/format'
 import { clearInviteCode, markWelcomed, parseInviteInput, pendingInviteCode, setInviteCode } from '../lib/identity'
 import { errorMessage, isUserRejection } from '../lib/wallet'
-import { $, busy, copyText, html, openSheet, raw, toast, type Raw } from '../ui'
+import { $, skeleton, busy, copyText, html, openSheet, raw, toast, type Raw } from '../ui'
 import { header } from './common'
 import { statsStrip } from './saver'
 
@@ -55,7 +55,7 @@ async function doSignIn(btn: HTMLButtonElement | null, inviteInput: HTMLInputEle
     if (code) setInviteCode(code)
     else clearInviteCode()
   }
-  return busy(btn, 'Confirm in Nimiq Pay…', async () => {
+  const done = await busy(btn, 'Confirm in Nimiq Pay…', async () => {
     try {
       const r = await signIn()
       invalidateBoard()
@@ -67,6 +67,7 @@ async function doSignIn(btn: HTMLButtonElement | null, inviteInput: HTMLInputEle
       return false
     }
   })
+  return done ?? false
 }
 
 /** Shown once per wallet after connecting, so a new user can create their profile in one tap. */
@@ -96,7 +97,8 @@ export function openWelcomeSheet(): void {
 export function renderProfile(root: HTMLElement): void {
   const p = ctx.profile
   if (ctx.profileStatus === 'unknown') {
-    root.innerHTML = html`${header()}<main class="page center-page"><div class="spinner big"></div><p class="muted">Loading your profile…</p></main>`.html
+    root.innerHTML = html`${header()}<main class="page" aria-busy="true"><section class="profile-head">${skeleton(3, 'skeleton-profile')}</section>
+      <section class="card">${skeleton(3)}</section><p class="muted center small">Loading your profile…</p></main>`.html
     return
   }
   if (ctx.profileStatus === 'unavailable') {
@@ -127,7 +129,7 @@ export function renderProfile(root: HTMLElement): void {
   }
 
   const link = inviteUrl(p.code)
-  const shareText = 'Join me on Holdfast: lock your savings goals in Nimiq Pay and earn staking rewards while you save.'
+  const shareText = 'Join me on Holdfast 🔒 Lock your savings goals in Nimiq Pay and earn staking rewards while you save:'
   root.innerHTML = html`${header()}
   <main class="page">
     <section class="profile-head">
@@ -151,7 +153,7 @@ export function renderProfile(root: HTMLElement): void {
         <button class="btn btn-secondary" id="share-invite">Share…</button>
         <button class="btn btn-ghost invite-copy" id="copy-invite">Copy link</button>
       </div>
-      <a class="btn btn-link invite-wa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`${shareText} ${link}`)}">Send via WhatsApp</a>
+      <a class="btn btn-link invite-wa" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`${shareText}\n${link}`)}">Send via WhatsApp</a>
     </section>
 
     <section class="card">
@@ -264,6 +266,7 @@ interface BoardState {
 }
 let board: BoardState | null = null
 let boardLoading = false
+let boardEntered = false
 
 async function loadBoard(): Promise<void> {
   if (boardLoading) return
@@ -287,6 +290,9 @@ export function renderBoard(root: HTMLElement): void {
   void refreshStats()
   const me = ctx.profile
   const inTop = !!me && !!board?.rows.some((r) => r.code === me.code)
+  // The rows rise in once per visit, the first time they are shown.
+  const enter = !!board?.rows.length && !boardEntered
+  if (enter) boardEntered = true
   root.innerHTML = html`${header()}
   <main class="page">
     <section class="hero small">
@@ -296,19 +302,19 @@ export function renderBoard(root: HTMLElement): void {
     </section>
     ${
       !board
-        ? html`<div class="center-page short"><div class="spinner big"></div></div>`
+        ? html`<section class="card board-card" aria-busy="true">${skeleton(5, 'skeleton-rows')}</section>`
         : board.error && !board.rows.length
           ? html`<section class="card center"><p class="muted">${board.error}</p><button class="btn btn-secondary" id="board-retry">Try again</button></section>`
           : html`<section class="card board-card">
               ${
                 board.rows.length
-                  ? html`<ol class="people board">${board.rows.map(
+                  ? html`<ol class="people board ${enter ? 'enter' : ''}">${board.rows.map(
                       (r, i) => html`${
                         // Everyone below this line has no referrals yet, so has no rank.
                         r.rank === null && (i === 0 || board!.rows[i - 1]!.rank !== null)
                           ? html`<li class="board-divider" aria-hidden="true"><span>${i === 0 ? 'No referrals yet. Invite a friend to take #1' : 'Not ranked yet'}</span></li>`
                           : ''
-                      }<li class="${me && r.code === me.code ? 'is-me' : ''}">
+                      }<li class="${me && r.code === me.code ? 'is-me' : ''}" style="--n:${Math.min(i, 12)}">
                         <span class="rank">${r.rank === null ? '–' : (MEDALS[r.rank - 1] ?? r.rank)}</span>
                         ${avatar(r.name, r.address)}
                         <div class="who"><b>${r.name}${me && r.code === me.code ? html` <span class="chip chip-lock">You</span>` : ''}</b>
@@ -344,7 +350,7 @@ export function tabBar(active: 'goal' | 'board' | 'me'): Raw {
     html`<a href="${href}" class="${id === active ? 'active' : ''}" ${id === active ? raw('aria-current="page"') : ''}>
       <span class="tab-icon" aria-hidden="true">${icon}${dot ? raw('<i class="tab-dot"></i>') : ''}</span><span>${label}</span></a>`
   return html`<nav class="tabbar" aria-label="Main">
-    ${tab('goal', '#/', '🎯', 'Goal')}
+    ${tab('goal', '#/', '🎯', 'Goals')}
     ${tab('board', '#/board', '🏆', 'Leaderboard')}
     ${tab('me', '#/me', '👤', 'Profile', ctx.profileStatus === 'signed_out')}
   </nav>`
