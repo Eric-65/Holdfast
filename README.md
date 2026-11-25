@@ -109,14 +109,14 @@ Each profile also records how many wallets had already used the same device and 
 
 | Area | Status |
 |---|---|
-| Goal creation, locking, the full 3-step withdrawal, Goalkeeper sharing, cheers, theme switch | ✅ Built. Tested end to end in a mobile browser with a simulated Nimiq Pay wallet |
-| Wallet connection screens (approved, declined, no answer, retry) | ✅ Tested in a browser with a simulated Nimiq Pay wallet |
-| **Open in Nimiq Pay** button | ⚠️ Built from the documented link format. Needs a check on a phone with Nimiq Pay installed |
-| Profiles, sign-in with a wallet signature, invite links, referrals, leaderboard | ✅ Built. Tested in a browser with simulated wallets that sign the way Nimiq wallets do. Needs a check with real Nimiq Pay signatures |
-| Amount parsing, address checks, goal history, share links, sign-in and referral rules | ✅ 82 automated tests |
-| Real staking transactions inside Nimiq Pay | ⚠️ Built with the official Nimiq SDK. Needs a final check on a real device |
+| Goal creation, locking, the full 3-step withdrawal, Goalkeeper sharing, cheers, theme switch | ✅ Tested on a real phone in Nimiq Pay |
+| Wallet connection screens (approved, declined, no answer, retry) | ✅ Tested on a real phone in Nimiq Pay |
+| **Open in Nimiq Pay** button | ✅ Tested on a real phone with Nimiq Pay installed |
+| Profiles, sign-in with a wallet signature, invite links, referrals, leaderboard | ✅ Tested on a real phone with real Nimiq Pay signatures |
+| Amount parsing, address checks, goal history, share links, sign-in and referral rules | ✅ 93 automated tests |
+| Real staking transactions inside Nimiq Pay | ✅ Tested on a real phone in Nimiq Pay |
 | Live progress straight from the blockchain | ✅ Read through Holdfast's own read-only relay to a public Nimiq RPC server. No setting needed |
-| Goal backup, live Goalkeeper pages, cheer wall, usage numbers | ✅ Built and covered by automated tests. Needs a check on a real device |
+| Goal backup, live Goalkeeper pages, cheer wall, usage numbers | ✅ Tested on a real phone in Nimiq Pay, and covered by automated tests |
 
 ---
 
